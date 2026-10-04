@@ -54,3 +54,35 @@ def normalize_for_matching(text: str) -> str:
     t = re.sub(r"\bPART\s+(ONE|TWO|THREE|FOUR)\b", lambda m: f"PART {_WORD_NUMBERS[m.group(1)]}", t)
     t = re.sub(r"[^A-Z0-9\s]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
+
+
+CREDIT_PHRASES = (
+    "DIRECTED BY",
+    "WRITTEN BY",
+    "STORY BY",
+    "TELEPLAY BY",
+    "PRODUCED BY",
+    "EXECUTIVE PRODUCER",
+    "SUPERVISING PRODUCER",
+    "ASSOCIATE PRODUCER",
+    "MUSIC BY",
+    "ANIMATION BY",
+    "ANIMATION DIRECTOR",
+    "CREATED BY",
+    "STARRING",
+    "GUEST STARRING",
+    "DEVELOPED BY",
+    "ART DIRECTOR",
+    "CHARACTER DESIGN",
+    "PRODUCTION DESIGNER",
+    "CASTING BY",
+    "EDITED BY",
+)
+
+
+def has_credit_keywords(text: str) -> bool:
+    """True if text appears to be director, writer, or staff credits rather than a pure title."""
+    if not text:
+        return False
+    norm = normalize_for_matching(text)
+    return any(phrase in norm for phrase in CREDIT_PHRASES)

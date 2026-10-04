@@ -5,12 +5,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
-from .matcher import is_confident_unique, rank_episodes_for_file, resolve_global_assignments
+from .matcher import is_confident_unique, rank_episodes_for_file, resolve_global_assignments, token_similarity
 from .metadata import EpisodeInfo, resolve_show_metadata
 from .naming import build_target_relpath, parse_series_folder
-from .ocr import run_ocr
+from .ocr import run_ocr, has_credit_keywords
 from .renamer import RenameError, execute_staged_rename, export_title_cards, find_undoable_log, undo_rename
-from .video import DEFAULT_FRAME_WINDOWS, build_candidate_timestamps, extract_frame, parse_frame_windows, probe_video
+from .video import DEFAULT_FRAME_WINDOWS, build_candidate_timestamps, extract_frame, parse_frame_windows, probe_video, parse_timestamp_str
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".ts", ".avi", ".m2ts", ".mov"}
 SKIP = "__skip__"            # override value: leave this file untouched
@@ -62,6 +62,12 @@ class MatchingPipeline:
 
         # file_path -> [(EpisodeInfo, score, timestamp, ocr_text, image_path), ...]
         self.file_candidates: Dict[str, list] = {}
+        # file_path -> [{"timestamp": t, "image_path": p, "ocr_text": s, "score": sc, "has_credits": bool, "episode_code": c}, ...]
+        self.file_frames: Dict[str, list] = {}
+        self.last_frame_windows = DEFAULT_FRAME_WINDOWS
+        self.last_min_score = 0.35
+        self.last_use_chapters = True
+
         # file_path -> {episode, score, timestamp, ocr_text, image_path, confirmed, manual}
         self.matches: Dict[str, dict] = {}
         self.overrides: Dict[str, str] = {}  # file_path -> episode_code or SKIP
@@ -92,17 +98,38 @@ class MatchingPipeline:
             counts = {"will_rename": 0, "needs_review": 0, "unmatched": 0, "skipped": 0}
             for fp in self.files:
                 m = self.matches.get(fp)
+                active_img = m.get("image_path") if m else ""
+                stored_frames = self.file_frames.get(fp, [])
+                available_frames = [
+                    {
+                        "timestamp": f["timestamp"],
+                        "image_path": f["image_path"],
+                        "score": f.get("score", 0.0),
+                        "ocr_sample": (f.get("ocr_text") or "")[:140],
+                        "has_credits": f.get("has_credits", False),
+                        "is_active": (f.get("image_path") == active_img),
+                        "episode_code": f.get("episode_code", ""),
+                    }
+                    for f in stored_frames
+                    if f.get("image_path") and os.path.exists(f["image_path"])
+                ]
+                active_idx = next((i for i, f in enumerate(available_frames) if f["is_active"]), 0) if available_frames else -1
+
                 base = {
                     "file_path": fp,
                     "file_name": os.path.basename(fp),
                     "rel_path": os.path.relpath(fp, self.series_dir) if self.series_dir else fp,
                     "duration": round(self.file_info.get(fp, {}).get("duration", 0.0), 1),
+                    "available_frames": available_frames,
+                    "frame_count": len(available_frames),
+                    "active_frame_index": active_idx,
                 }
                 if m:
                     ep = m["episode"]
                     warning, needs_review = self._match_flags(fp, m)
                     target = self._target_relpath(fp, ep)
                     unchanged = os.path.join(self.series_dir, *target.split("/")) == fp
+                    has_cred = has_credit_keywords(m.get("ocr_text", ""))
                     counts["needs_review" if needs_review else "will_rename"] += 1
                     items.append({**base,
                         "episode_code": ep.code,
@@ -117,6 +144,7 @@ class MatchingPipeline:
                         "is_overridden": bool(m.get("manual")),
                         "confirmed": bool(m.get("confirmed")),
                         "needs_review": needs_review,
+                        "has_credits": has_cred,
                         "warning": warning,
                         "target_relpath": target,
                         "already_named": unchanged,
@@ -130,7 +158,7 @@ class MatchingPipeline:
                         "season": 0, "episode_num": 0, "score": 0.0, "timestamp": 0.0,
                         "ocr_sample": "", "has_thumbnail": False, "image_path": "",
                         "is_overridden": skipped, "confirmed": False, "needs_review": False,
-                        "warning": "", "target_relpath": "", "already_named": False,
+                        "has_credits": False, "warning": "", "target_relpath": "", "already_named": False,
                         "status": "skipped" if skipped else "unmatched",
                     })
 
@@ -195,6 +223,10 @@ class MatchingPipeline:
             self.scan_dir = os.path.join(self.temp_dir, f"scan_{self._scan_counter:03d}")
             os.makedirs(self.scan_dir, exist_ok=True)
 
+        self.last_frame_windows = frame_windows
+        self.last_min_score = float(min_score)
+        self.last_use_chapters = bool(use_chapters)
+
         params = dict(series_name=series_name, tvdb_id=tvdb_id, episodes_file=episodes_file,
                       min_score=float(min_score), metadata_source=metadata_source, tmdb_api_key=tmdb_api_key,
                       frame_windows=frame_windows, use_chapters=bool(use_chapters),
@@ -210,6 +242,7 @@ class MatchingPipeline:
         timestamps = build_candidate_timestamps(info, params["frame_windows"], params["use_chapters"])
         best: Dict[str, tuple] = {}
         candidates: list = []
+        frames: list = []
         for t in timestamps:
             if self._cancel.is_set():
                 break
@@ -221,18 +254,37 @@ class MatchingPipeline:
             ocr_txt = run_ocr(img_path, variants=variants)
             for v in variants:
                 if os.path.exists(v):
-                    os.remove(v)
+                    try:
+                        os.remove(v)
+                    except Exception:
+                        pass
             if not ocr_txt:
-                os.remove(img_path)
+                try:
+                    os.remove(img_path)
+                except Exception:
+                    pass
                 continue
-            for cand in rank_episodes_for_file([(t, ocr_txt, img_path)], self.all_episodes, params["min_score"]):
+
+            frame_cands = rank_episodes_for_file([(t, ocr_txt, img_path)], self.all_episodes, params["min_score"])
+            best_code = frame_cands[0][0].code if frame_cands else ""
+            best_score = frame_cands[0][1] if frame_cands else 0.0
+            has_credits = has_credit_keywords(ocr_txt)
+            frames.append({
+                "timestamp": round(t, 2),
+                "image_path": img_path,
+                "ocr_text": ocr_txt,
+                "score": round(best_score, 2),
+                "has_credits": has_credits,
+                "episode_code": best_code,
+            })
+            for cand in frame_cands:
                 code = cand[0].code
                 if code not in best or cand[1] > best[code][1]:
                     best[code] = cand
             candidates = sorted(best.values(), key=lambda c: (-c[1], c[0].code))
             if is_confident_unique(candidates):
                 break  # clear title-card hit: no need to OCR the remaining frames
-        return candidates, info.duration
+        return candidates, info.duration, frames
 
     def _run_scan_thread(self, series_dir: str, params: dict):
         try:
@@ -270,6 +322,7 @@ class MatchingPipeline:
             total = len(files)
             done = 0
             file_candidates = {}
+            file_frames = {}
             scan_dir = self.scan_dir
             self.status_message = f"Analysing {total} file(s) with {params['workers']} worker(s)..."
             with ThreadPoolExecutor(max_workers=params["workers"]) as pool:
@@ -278,11 +331,12 @@ class MatchingPipeline:
                 for fut in as_completed(futures):
                     fp = futures[fut]
                     try:
-                        candidates, duration = fut.result()
+                        candidates, duration, frames = fut.result()
                     except Exception as e:  # one bad file shouldn't abort the whole scan
-                        candidates, duration = [], 0.0
+                        candidates, duration, frames = [], 0.0, []
                         self.error_details.append(f"{os.path.basename(fp)}: {e}")
                     file_candidates[fp] = candidates
+                    file_frames[fp] = frames
                     with self._lock:
                         self.file_info[fp] = {"duration": duration}
                     done += 1
@@ -297,6 +351,7 @@ class MatchingPipeline:
 
             with self._lock:
                 self.file_candidates = file_candidates
+                self.file_frames = file_frames
                 self.matches = {
                     fp: {"episode": ep, "score": score, "timestamp": t, "ocr_text": txt, "image_path": img,
                          "confirmed": False, "manual": False}
@@ -368,6 +423,236 @@ class MatchingPipeline:
             m["confirmed"] = True
             self._bump()
             return {"success": True}
+
+    def set_active_frame(self, file_path: str, timestamp: float) -> dict:
+        """Switches the active title card frame for a file to an already-extracted frame or captures it."""
+        with self._lock:
+            if self.state in BUSY_STATES:
+                return {"success": False, "error": "A job is currently running. Please wait."}
+            if file_path not in self.files:
+                return {"success": False, "error": "Unknown file."}
+
+            frames = self.file_frames.get(file_path, [])
+            frame = next((f for f in frames if abs(f["timestamp"] - timestamp) < 0.25), None)
+            if not frame:
+                return self.capture_custom_frame(file_path, timestamp)
+
+            m = self.matches.get(file_path)
+            if not m:
+                # If currently unmatched, try to find an episode match from this frame
+                ep_code = frame.get("episode_code")
+                ep = next((e for e in self.all_episodes if e.code == ep_code), None) if ep_code else None
+                if ep:
+                    self.matches[file_path] = {
+                        "episode": ep,
+                        "score": frame.get("score", 0.5),
+                        "timestamp": frame["timestamp"],
+                        "ocr_text": frame.get("ocr_text", ""),
+                        "image_path": frame.get("image_path", ""),
+                        "confirmed": True,
+                        "manual": False,
+                    }
+                else:
+                    return {"success": False, "error": "File is not currently matched to an episode. Select an episode first."}
+            else:
+                m["timestamp"] = frame["timestamp"]
+                m["image_path"] = frame["image_path"]
+                m["ocr_text"] = frame.get("ocr_text", "")
+                if not m.get("manual") and m.get("episode"):
+                    new_score = token_similarity(m["episode"].title, m["ocr_text"])
+                    m["score"] = round(new_score, 2)
+                m["confirmed"] = True
+
+            self._bump()
+            return {
+                "success": True,
+                "timestamp": frame["timestamp"],
+                "image_path": frame["image_path"],
+                "score": self.matches[file_path]["score"],
+                "ocr_text": self.matches[file_path]["ocr_text"],
+            }
+
+    def capture_custom_frame(self, file_path: str, timestamp_val) -> dict:
+        """Extracts a frame at a specific timestamp (seconds or MM:SS) and assigns it as the active title card."""
+        try:
+            t = parse_timestamp_str(timestamp_val)
+        except Exception as e:
+            return {"success": False, "error": f"Invalid timestamp format: {e}"}
+
+        with self._lock:
+            if self.state in BUSY_STATES:
+                return {"success": False, "error": "A job is currently running. Please wait."}
+            if file_path not in self.files or not os.path.isfile(file_path):
+                return {"success": False, "error": "Media file not found."}
+
+            if not self.scan_dir or not os.path.isdir(self.scan_dir):
+                self._scan_counter += 1
+                self.scan_dir = os.path.join(self.temp_dir, f"scan_{self._scan_counter:03d}")
+                os.makedirs(self.scan_dir, exist_ok=True)
+
+            idx = self.files.index(file_path) + 1
+            img_path = os.path.join(self.scan_dir, f"custom_{idx:04d}_{int(round(t * 10)):06d}.jpg")
+
+        if not extract_frame(file_path, t, img_path):
+            return {"success": False, "error": f"Could not extract frame at t={t:.1f}s (blank frame or out of bounds)."}
+
+        stem = os.path.splitext(img_path)[0]
+        variants = [f"{stem}_ocr.png", f"{stem}_ocr_inv.png"]
+        ocr_txt = run_ocr(img_path, variants=variants)
+        for v in variants:
+            if os.path.exists(v):
+                try:
+                    os.remove(v)
+                except Exception:
+                    pass
+
+        frame_cands = rank_episodes_for_file([(t, ocr_txt, img_path)], self.all_episodes, 0.20) if self.all_episodes else []
+        best_code = frame_cands[0][0].code if frame_cands else ""
+        best_score = frame_cands[0][1] if frame_cands else 0.0
+
+        new_frame = {
+            "timestamp": round(t, 2),
+            "image_path": img_path,
+            "ocr_text": ocr_txt,
+            "score": round(best_score, 2),
+            "has_credits": has_credit_keywords(ocr_txt),
+            "episode_code": best_code,
+        }
+
+        with self._lock:
+            frames = self.file_frames.setdefault(file_path, [])
+            frames = [f for f in frames if abs(f["timestamp"] - t) >= 0.25]
+            frames.append(new_frame)
+            frames.sort(key=lambda f: f["timestamp"])
+            self.file_frames[file_path] = frames
+
+            m = self.matches.get(file_path)
+            if m:
+                m["timestamp"] = round(t, 2)
+                m["image_path"] = img_path
+                m["ocr_text"] = ocr_txt
+                if not m.get("manual") and m.get("episode"):
+                    new_score = token_similarity(m["episode"].title, ocr_txt)
+                    m["score"] = round(new_score, 2)
+                m["confirmed"] = True
+            elif frame_cands:
+                self.matches[file_path] = {
+                    "episode": frame_cands[0][0],
+                    "score": round(frame_cands[0][1], 2),
+                    "timestamp": round(t, 2),
+                    "ocr_text": ocr_txt,
+                    "image_path": img_path,
+                    "confirmed": True,
+                    "manual": False,
+                }
+
+            self._bump()
+            return {"success": True, "frame": new_frame, "match": self.matches.get(file_path)}
+
+    def rescan_single_file(self, file_path: str, frame_windows: str = "",
+                          min_score: Optional[float] = None, use_chapters: Optional[bool] = None) -> dict:
+        """Rescans a single video file with default or custom frame windows without rescanning the whole folder."""
+        with self._lock:
+            if self.state in BUSY_STATES:
+                return {"success": False, "error": "A job is currently running. Please wait."}
+            if file_path not in self.files:
+                if os.path.isfile(file_path):
+                    self.files.append(file_path)
+                    self.files.sort()
+                else:
+                    return {"success": False, "error": f"File not found: {file_path}"}
+
+            if not self.all_episodes:
+                return {"success": False, "error": "No episode list available. Please run a series scan first."}
+
+            if not self.scan_dir or not os.path.isdir(self.scan_dir):
+                self._scan_counter += 1
+                self.scan_dir = os.path.join(self.temp_dir, f"scan_{self._scan_counter:03d}")
+                os.makedirs(self.scan_dir, exist_ok=True)
+
+            win = (frame_windows or "").strip() or self.last_frame_windows or DEFAULT_FRAME_WINDOWS
+            try:
+                parse_frame_windows(win)
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+
+            score_thresh = float(min_score) if min_score is not None else self.last_min_score
+            use_chap = bool(self.last_use_chapters if use_chapters is None else use_chapters)
+
+            idx = self.files.index(file_path) + 1
+            scan_dir = self.scan_dir
+            params = {
+                "frame_windows": win,
+                "min_score": score_thresh,
+                "use_chapters": use_chap,
+            }
+
+        try:
+            candidates, duration, frames = self._analyze_file(idx, file_path, params, scan_dir)
+        except Exception as e:
+            return {"success": False, "error": f"Analysis failed: {e}"}
+
+        with self._lock:
+            self.file_info[file_path] = {"duration": duration}
+            self.file_candidates[file_path] = candidates
+            self.file_frames[file_path] = frames
+
+            current_override = self.overrides.get(file_path)
+            if current_override and current_override != SKIP:
+                target_ep = next((ep for ep in self.all_episodes if ep.code == current_override), None)
+                matched_frame = next((f for f in frames if f.get("episode_code") == current_override), None)
+                best_frame = matched_frame or (frames[0] if frames else None)
+                self.matches[file_path] = {
+                    "episode": target_ep,
+                    "score": 1.0,
+                    "timestamp": best_frame["timestamp"] if best_frame else 0.0,
+                    "ocr_text": best_frame["ocr_text"] if best_frame else "[Manually Assigned by User]",
+                    "image_path": best_frame["image_path"] if best_frame else "",
+                    "confirmed": True,
+                    "manual": True,
+                }
+            elif current_override == SKIP:
+                pass
+            else:
+                assigned_elsewhere = {
+                    m["episode"].code: m["score"]
+                    for fp, m in self.matches.items()
+                    if fp != file_path and m.get("episode")
+                }
+                chosen_cand = None
+                for cand in candidates:
+                    ep_code = cand[0].code
+                    if ep_code not in assigned_elsewhere or cand[1] > assigned_elsewhere[ep_code]:
+                        chosen_cand = cand
+                        break
+
+                if chosen_cand:
+                    ep, score, t, txt, img = chosen_cand
+                    displaced_fp = next((fp for fp, m in self.matches.items()
+                                        if fp != file_path and m["episode"].code == ep.code), None)
+                    if displaced_fp:
+                        del self.matches[displaced_fp]
+                        self.overrides.pop(displaced_fp, None)
+
+                    self.matches[file_path] = {
+                        "episode": ep,
+                        "score": score,
+                        "timestamp": t,
+                        "ocr_text": txt,
+                        "image_path": img,
+                        "confirmed": False,
+                        "manual": False,
+                    }
+                else:
+                    self.matches.pop(file_path, None)
+
+            self._bump()
+            return {
+                "success": True,
+                "file_path": file_path,
+                "match": self.matches.get(file_path),
+                "frames_count": len(frames),
+            }
 
     # ----------------------------------------------------------- rename / undo
 

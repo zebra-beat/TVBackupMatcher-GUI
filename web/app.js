@@ -291,13 +291,57 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
       const img = document.createElement("img");
       img.src = `/api/thumbnail?path=${encodeURIComponent(item.image_path)}`;
       img.alt = item.episode_title;
-      img.onclick = () => openModal(item.image_path, `${item.episode_code || ""} ${item.episode_title}`, `Timestamp: t = ${item.timestamp}s`);
+      img.onclick = () => openModal(
+        item.file_path,
+        item.image_path,
+        `${item.episode_code || ""} ${item.episode_title}`,
+        `File: ${item.file_name} • t = ${item.timestamp}s`,
+        item.ocr_sample,
+        item.available_frames,
+        item.active_frame_index
+      );
       thumbWrap.appendChild(img);
 
-      const tag = document.createElement("span");
-      tag.className = "thumb-tag";
-      tag.textContent = `t = ${item.timestamp}s`;
-      thumbWrap.appendChild(tag);
+      if (item.has_credits) {
+        const credBadge = document.createElement("span");
+        credBadge.className = "credit-badge";
+        credBadge.textContent = "⚠️ Staff Credits";
+        credBadge.title = "Director, Writer, or Staff credits detected in this frame";
+        thumbWrap.appendChild(credBadge);
+      }
+
+      if (item.available_frames && item.available_frames.length > 1) {
+        const nav = document.createElement("div");
+        nav.className = "thumb-nav";
+
+        const prevBtn = document.createElement("button");
+        prevBtn.type = "button";
+        prevBtn.className = "thumb-nav-btn";
+        prevBtn.innerHTML = "◀";
+        prevBtn.title = "Previous captured frame";
+        prevBtn.onclick = (e) => { e.stopPropagation(); cycleFrame(item.file_path, -1); };
+
+        const counter = document.createElement("span");
+        counter.className = "thumb-counter";
+        counter.textContent = `t = ${item.timestamp}s (${(item.active_frame_index >= 0 ? item.active_frame_index : 0) + 1}/${item.available_frames.length})`;
+
+        const nextBtn = document.createElement("button");
+        nextBtn.type = "button";
+        nextBtn.className = "thumb-nav-btn";
+        nextBtn.innerHTML = "▶";
+        nextBtn.title = "Next captured frame";
+        nextBtn.onclick = (e) => { e.stopPropagation(); cycleFrame(item.file_path, 1); };
+
+        nav.appendChild(prevBtn);
+        nav.appendChild(counter);
+        nav.appendChild(nextBtn);
+        thumbWrap.appendChild(nav);
+      } else {
+        const tag = document.createElement("span");
+        tag.className = "thumb-tag";
+        tag.textContent = `t = ${item.timestamp}s`;
+        thumbWrap.appendChild(tag);
+      }
     } else {
       thumbWrap.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:12px;">No Title Card Captured</div>`;
     }
@@ -398,9 +442,85 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     overrideRow.appendChild(actionFlex);
     content.appendChild(overrideRow);
 
+    // Card Tools: Rescan File & Frame Drawer Toggle
+    const toolsRow = document.createElement("div");
+    toolsRow.className = "card-tools";
+
+    const btnRescan = document.createElement("button");
+    btnRescan.type = "button";
+    btnRescan.className = "btn-card-tool";
+    btnRescan.innerHTML = "<span>🔄</span> Rescan File";
+    btnRescan.title = "Re-analyze candidate frames for this file only";
+    btnRescan.onclick = () => rescanSingleFile(item.file_path);
+    toolsRow.appendChild(btnRescan);
+
+    const btnDrawer = document.createElement("button");
+    btnDrawer.type = "button";
+    btnDrawer.className = "btn-card-tool";
+    btnDrawer.innerHTML = `<span>⏱️</span> Frames (${item.frame_count || (item.available_frames ? item.available_frames.length : 1)})`;
+    btnDrawer.title = "Pick another captured frame or extract at custom timestamp";
+    toolsRow.appendChild(btnDrawer);
+
+    content.appendChild(toolsRow);
+
+    // Collapsible Frame Drawer
+    const drawer = document.createElement("div");
+    drawer.className = "frame-drawer";
+    drawer.style.display = "none";
+    btnDrawer.onclick = () => {
+      drawer.style.display = drawer.style.display === "none" ? "flex" : "none";
+    };
+
+    // If multiple frames exist, display chips
+    if (item.available_frames && item.available_frames.length > 0) {
+      const chipsContainer = document.createElement("div");
+      chipsContainer.className = "frame-chips";
+      item.available_frames.forEach((f, idx) => {
+        const chip = document.createElement("div");
+        chip.className = `frame-chip ${f.is_active ? "active" : ""} ${f.has_credits ? "credits" : ""}`;
+        chip.title = f.ocr_sample ? `OCR: ${f.ocr_sample}` : `Timestamp: ${f.timestamp}s`;
+        chip.innerHTML = `${f.is_active ? "✓ " : ""}t = ${f.timestamp}s ${f.has_credits ? "⚠️" : ""}`;
+        chip.onclick = () => setActiveFrame(item.file_path, f.timestamp);
+        chipsContainer.appendChild(chip);
+      });
+      drawer.appendChild(chipsContainer);
+    }
+
+    // Custom capture input row
+    const captureRow = document.createElement("div");
+    captureRow.className = "frame-drawer-row";
+    captureRow.innerHTML = `
+      <label>Capture Time:</label>
+      <input type="text" placeholder="e.g. 74.5 or 01:14" id="time-input-${indexSafe(item.file_path)}">
+      <button type="button" class="btn btn-primary btn-sm">Capture</button>
+    `;
+    const captureBtn = captureRow.querySelector("button");
+    const captureInput = captureRow.querySelector("input");
+    captureBtn.onclick = () => captureCustomFrame(item.file_path, captureInput.value.trim());
+    drawer.appendChild(captureRow);
+
+    // Custom rescan window input row
+    const rescanRow = document.createElement("div");
+    rescanRow.className = "frame-drawer-row";
+    rescanRow.innerHTML = `
+      <label>Window (s):</label>
+      <input type="text" value="${document.getElementById('frame-windows')?.value || '64-75'}" id="rescan-win-${indexSafe(item.file_path)}">
+      <button type="button" class="btn btn-secondary btn-sm">Rescan</button>
+    `;
+    const customRescanBtn = rescanRow.querySelector("button");
+    const customRescanInput = rescanRow.querySelector("input");
+    customRescanBtn.onclick = () => rescanSingleFile(item.file_path, customRescanInput.value.trim());
+    drawer.appendChild(rescanRow);
+
+    content.appendChild(drawer);
+
     card.appendChild(content);
     grid.appendChild(card);
   });
+}
+
+function indexSafe(str) {
+  return (str || "").replace(/[^a-zA-Z0-9]/g, "_");
 }
 
 async function confirmMatch(filePath) {
@@ -538,13 +658,155 @@ function resetForm() {
   }
 }
 
-function openModal(imgSrc, title, details) {
+// ------------------------------------------------------------- Frame & Rescan API
+
+async function setActiveFrame(filePath, timestamp) {
+  try {
+    const res = await fetch("/api/set_frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_path: filePath, timestamp: timestamp })
+    });
+    const data = await res.json();
+    if (data.success) {
+      pollState();
+    } else {
+      alert("Failed to switch frame: " + data.error);
+    }
+  } catch (err) {
+    alert("Error switching frame: " + err.message);
+  }
+}
+
+async function captureCustomFrame(filePath, timestampVal) {
+  if (!timestampVal) {
+    alert("Please enter a timestamp (seconds like 74.5 or MM:SS like 01:14).");
+    return;
+  }
+  try {
+    const res = await fetch("/api/capture_frame", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_path: filePath, timestamp: timestampVal })
+    });
+    const data = await res.json();
+    if (data.success) {
+      pollState();
+    } else {
+      alert("Capture error: " + data.error);
+    }
+  } catch (err) {
+    alert("Error capturing frame: " + err.message);
+  }
+}
+
+async function rescanSingleFile(filePath, customWindow = "") {
+  try {
+    const res = await fetch("/api/rescan_file", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_path: filePath,
+        frame_windows: customWindow || document.getElementById("frame-windows")?.value || "64-75"
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      pollState();
+    } else {
+      alert("Rescan failed: " + data.error);
+    }
+  } catch (err) {
+    alert("Error rescanning file: " + err.message);
+  }
+}
+
+function cycleFrame(filePath, delta) {
+  const item = currentState?.matches?.find(m => m.file_path === filePath);
+  if (!item || !item.available_frames || item.available_frames.length <= 1) return;
+  const currentIdx = item.active_frame_index >= 0 ? item.active_frame_index : 0;
+  let nextIdx = (currentIdx + delta) % item.available_frames.length;
+  if (nextIdx < 0) nextIdx = item.available_frames.length - 1;
+  const targetFrame = item.available_frames[nextIdx];
+  if (targetFrame) {
+    setActiveFrame(filePath, targetFrame.timestamp);
+  }
+}
+
+// ------------------------------------------------------------- Modal Handlers
+
+let modalState = { filePath: "", frames: [], activeIdx: 0, title: "", details: "" };
+
+function openModal(filePath, imgSrc, title, details, ocrSample = "", frames = [], activeIdx = 0) {
+  modalState = {
+    filePath: filePath || "",
+    frames: frames || [],
+    activeIdx: activeIdx >= 0 ? activeIdx : 0,
+    title: title || "",
+    details: details || ""
+  };
   const modal = document.getElementById("image-modal");
   const img = document.getElementById("modal-img");
   img.src = `/api/thumbnail?path=${encodeURIComponent(imgSrc)}`;
   document.getElementById("modal-title").textContent = title;
   document.getElementById("modal-details").textContent = details;
+
+  const ocrBox = document.getElementById("modal-ocr-box");
+  if (ocrSample) {
+    ocrBox.textContent = "OCR Text: " + ocrSample;
+    ocrBox.style.display = "block";
+  } else {
+    ocrBox.style.display = "none";
+  }
+
+  const thumbNav = document.getElementById("modal-thumb-nav");
+  if (frames && frames.length > 1) {
+    thumbNav.style.display = "flex";
+    document.getElementById("modal-counter").textContent = `Frame ${modalState.activeIdx + 1} of ${frames.length}`;
+  } else {
+    thumbNav.style.display = "none";
+  }
+
   modal.style.display = "flex";
+}
+
+function modalCycleFrame(delta) {
+  if (!modalState.frames || modalState.frames.length <= 1) return;
+  let nextIdx = (modalState.activeIdx + delta) % modalState.frames.length;
+  if (nextIdx < 0) nextIdx = modalState.frames.length - 1;
+  modalState.activeIdx = nextIdx;
+  const frame = modalState.frames[nextIdx];
+
+  document.getElementById("modal-img").src = `/api/thumbnail?path=${encodeURIComponent(frame.image_path)}`;
+  document.getElementById("modal-counter").textContent = `Frame ${nextIdx + 1} of ${modalState.frames.length} (t = ${frame.timestamp}s)`;
+
+  const ocrBox = document.getElementById("modal-ocr-box");
+  if (frame.ocr_sample) {
+    ocrBox.textContent = "OCR Text: " + frame.ocr_sample + (frame.has_credits ? " [⚠️ Staff Credits Detected]" : "");
+    ocrBox.style.display = "block";
+  } else {
+    ocrBox.style.display = "none";
+  }
+
+  if (modalState.filePath) {
+    setActiveFrame(modalState.filePath, frame.timestamp);
+  }
+}
+
+async function modalCaptureCustom() {
+  const val = document.getElementById("modal-time-input").value.trim();
+  if (!val || !modalState.filePath) return;
+  await captureCustomFrame(modalState.filePath, val);
+  document.getElementById("modal-time-input").value = "";
+  closeModal();
+}
+
+async function modalRescanFile() {
+  const win = document.getElementById("modal-rescan-win").value.trim();
+  if (!modalState.filePath) return;
+  await rescanSingleFile(modalState.filePath, win);
+  document.getElementById("modal-rescan-win").value = "";
+  closeModal();
 }
 
 function closeModal() {

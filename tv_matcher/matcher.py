@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 from .metadata import EpisodeInfo
-from .ocr import normalize_for_matching
+from .ocr import has_credit_keywords, normalize_for_matching
 
 STOPWORDS = {"THE", "AND", "FOR", "OF", "A", "AN", "TO", "IN", "ON", "AT", "IS"}
 MIN_OCR_WORD_LEN = 3        # OCR words shorter than this are treated as noise for fuzzy matching
@@ -109,6 +109,11 @@ def find_best_episode_for_file(
 def is_confident_unique(candidates: List[Candidate], threshold: float = PHRASE_SCORE, margin: float = 0.3) -> bool:
     """True when the top candidate is a near-certain match clearly ahead of the runner-up."""
     if not candidates or candidates[0][1] < threshold:
+        return False
+    # If the frame contains staff/credit keywords (e.g. Director, Writer, Producer),
+    # do not early exit: keep scanning candidate timestamps to find a clean title card.
+    top_ocr = candidates[0][3] if len(candidates[0]) > 3 else ""
+    if has_credit_keywords(top_ocr):
         return False
     return len(candidates) == 1 or candidates[0][1] - candidates[1][1] >= margin
 

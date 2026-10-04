@@ -152,6 +152,39 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
             elif path == "/api/confirm":
                 self.send_json(self.pipeline.confirm_match(data.get("file_path", "")))
 
+            elif path == "/api/set_frame":
+                file_path = str(data.get("file_path", "")).strip()
+                t_val = data.get("timestamp", 0.0)
+                try:
+                    t = float(t_val)
+                except (ValueError, TypeError):
+                    self.send_json({"success": False, "error": "Invalid timestamp number."}, status=400)
+                    return
+                self.send_json(self.pipeline.set_active_frame(file_path, t))
+
+            elif path == "/api/capture_frame":
+                file_path = str(data.get("file_path", "")).strip()
+                t_val = data.get("timestamp", "")
+                if not file_path or t_val is None or str(t_val).strip() == "":
+                    self.send_json({"success": False, "error": "file_path and timestamp required."}, status=400)
+                    return
+                self.send_json(self.pipeline.capture_custom_frame(file_path, t_val))
+
+            elif path == "/api/rescan_file":
+                file_path = str(data.get("file_path", "")).strip()
+                if not file_path:
+                    self.send_json({"success": False, "error": "file_path is required."}, status=400)
+                    return
+                win = str(data.get("frame_windows", "")).strip()
+                min_score = data.get("min_score")
+                use_chapters = data.get("use_chapters")
+                self.send_json(self.pipeline.rescan_single_file(
+                    file_path,
+                    frame_windows=win,
+                    min_score=min_score,
+                    use_chapters=use_chapters,
+                ))
+
             elif path == "/api/apply":
                 self.send_json(self.pipeline.apply_rename(
                     export_cards_dir=str(data.get("export_cards_dir", "")).strip(),

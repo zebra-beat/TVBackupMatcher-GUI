@@ -179,6 +179,42 @@ class TVBackupMatcherDesktopApp:
         self.confirm_btn = ttk.Button(btn_row, text="✓ Confirm Match", command=self._confirm_match)
         self.confirm_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # Frame Cycler Row
+        frame_nav_box = ttk.Frame(detail_frame)
+        frame_nav_box.pack(fill=tk.X, pady=(8, 2))
+
+        self.prev_frame_btn = ttk.Button(frame_nav_box, text="◀ Prev Frame", width=12, command=lambda: self._cycle_frame(-1), state=tk.DISABLED)
+        self.prev_frame_btn.pack(side=tk.LEFT)
+
+        self.frame_info_lbl = ttk.Label(frame_nav_box, text="Frame: --", font=("Helvetica", 10), anchor=tk.CENTER)
+        self.frame_info_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.next_frame_btn = ttk.Button(frame_nav_box, text="Next Frame ▶", width=12, command=lambda: self._cycle_frame(1), state=tk.DISABLED)
+        self.next_frame_btn.pack(side=tk.RIGHT)
+
+        # Custom Time Capture Row
+        capture_box = ttk.Frame(detail_frame)
+        capture_box.pack(fill=tk.X, pady=(4, 2))
+
+        ttk.Label(capture_box, text="Capture Time:").pack(side=tk.LEFT, padx=(0, 4))
+        self.custom_time_entry = ttk.Entry(capture_box, width=12)
+        self.custom_time_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        self.capture_btn = ttk.Button(capture_box, text="📷 Capture", command=self._capture_custom_frame, state=tk.DISABLED)
+        self.capture_btn.pack(side=tk.RIGHT)
+
+        # Single-file Rescan Row
+        rescan_box = ttk.Frame(detail_frame)
+        rescan_box.pack(fill=tk.X, pady=(2, 4))
+
+        ttk.Label(rescan_box, text="Rescan Win:").pack(side=tk.LEFT, padx=(0, 4))
+        self.single_win_entry = ttk.Entry(rescan_box, width=12)
+        self.single_win_entry.insert(0, self.settings.get("frame_windows", "64-75"))
+        self.single_win_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+
+        self.rescan_file_btn = ttk.Button(rescan_box, text="🔄 Rescan File", command=self._rescan_selected_file, state=tk.DISABLED)
+        self.rescan_file_btn.pack(side=tk.RIGHT)
+
         # 5. Bottom Action Bar
         act_frame = ttk.Frame(main_frame)
         act_frame.pack(fill=tk.X)
@@ -351,6 +387,31 @@ class TVBackupMatcherDesktopApp:
         self.preview_info_lbl.config(text=f"{code} - {title}")
         self.warning_lbl.config(text=f"⚠️ {warning_msg}" if warning_msg else "")
 
+        # Enable buttons
+        self.capture_btn.config(state=tk.NORMAL)
+        self.rescan_file_btn.config(state=tk.NORMAL)
+
+        # Get detailed match info from pipeline state
+        state = self.pipeline.get_state()
+        m_item = next((m for m in state.get("matches", []) if m["file_path"] == file_path), None)
+        available_frames = m_item.get("available_frames", []) if m_item else []
+        active_idx = m_item.get("active_frame_index", 0) if m_item else 0
+        timestamp = m_item.get("timestamp", 0.0) if m_item else 0.0
+        has_credits = m_item.get("has_credits", False) if m_item else False
+
+        if len(available_frames) > 1:
+            self.prev_frame_btn.config(state=tk.NORMAL)
+            self.next_frame_btn.config(state=tk.NORMAL)
+            info_txt = f"Frame {active_idx + 1} of {len(available_frames)} (t = {timestamp}s)"
+        else:
+            self.prev_frame_btn.config(state=tk.DISABLED)
+            self.next_frame_btn.config(state=tk.DISABLED)
+            info_txt = f"t = {timestamp}s" if timestamp else "Frame: 1 of 1"
+
+        if has_credits:
+            info_txt += " [⚠️ Staff Credits]"
+        self.frame_info_lbl.config(text=info_txt)
+
         # Set combo
         for opt in self.ep_combo['values']:
             if opt.startswith(code):
@@ -365,6 +426,73 @@ class TVBackupMatcherDesktopApp:
         else:
             self.preview_canvas.delete("all")
             self.preview_canvas.create_text(160, 90, text="No Preview Available", fill="#6b7280", font=("Helvetica", 12))
+
+    def _cycle_frame(self, delta: int):
+        if not self._selected_file_path:
+            return
+        state = self.pipeline.get_state()
+        m_item = next((m for m in state.get("matches", []) if m["file_path"] == self._selected_file_path), None)
+        if not m_item:
+            return
+        frames = m_item.get("available_frames", [])
+        if len(frames) <= 1:
+            return
+        curr_idx = m_item.get("active_frame_index", 0)
+        next_idx = (curr_idx + delta) % len(frames)
+        target_frame = frames[next_idx]
+
+        res = self.pipeline.set_active_frame(self._selected_file_path, target_frame["timestamp"])
+        if res.get("success"):
+            self._refresh_selected_row()
+
+    def _capture_custom_frame(self):
+        if not self._selected_file_path:
+            messagebox.showinfo("Select File", "Please select a file from the table first.")
+            return
+        time_val = self.custom_time_entry.get().strip()
+        if not time_val:
+            messagebox.showinfo("Enter Time", "Please enter a timestamp in seconds (e.g. 74.5) or MM:SS (e.g. 01:14).")
+            return
+        res = self.pipeline.capture_custom_frame(self._selected_file_path, time_val)
+        if res.get("success"):
+            self.custom_time_entry.delete(0, tk.END)
+            self._refresh_selected_row()
+        else:
+            messagebox.showerror("Capture Error", res.get("error", "Failed to extract frame."))
+
+    def _rescan_selected_file(self):
+        if not self._selected_file_path:
+            messagebox.showinfo("Select File", "Please select a file from the table first.")
+            return
+        win = self.single_win_entry.get().strip() or "64-75"
+        self.rescan_file_btn.config(state=tk.DISABLED, text="Rescanning...")
+        self.status_lbl.config(text=f"Rescanning '{os.path.basename(self._selected_file_path)}'...")
+
+        def _worker():
+            res = self.pipeline.rescan_single_file(self._selected_file_path, frame_windows=win)
+            def _done():
+                self.rescan_file_btn.config(state=tk.NORMAL, text="🔄 Rescan File")
+                if res.get("success"):
+                    self.status_lbl.config(text=f"Rescan complete for '{os.path.basename(self._selected_file_path)}'.")
+                    self._refresh_selected_row()
+                else:
+                    messagebox.showerror("Rescan Failed", res.get("error", "Rescan failed."))
+            self.root.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _refresh_selected_row(self):
+        saved_fp = self._selected_file_path
+        state = self.pipeline.get_state()
+        self._populate_results(state)
+        # Reselect row
+        for child in self.tree.get_children():
+            tags = self.tree.item(child, "tags")
+            if tags and tags[0] == saved_fp:
+                self.tree.selection_set(child)
+                self.tree.see(child)
+                self._on_tree_select(None)
+                break
 
     def _render_canvas_image(self, img_path: str):
         try:
