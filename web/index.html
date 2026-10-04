@@ -185,9 +185,30 @@
   <div class="modal" id="image-modal" onclick="closeModal()">
     <div class="modal-content" onclick="event.stopPropagation()">
       <span class="close-btn" onclick="closeModal()">&times;</span>
-      <img id="modal-img" src="" alt="Title Card Full Preview">
+      <div style="position: relative;">
+        <img id="modal-img" src="" alt="Title Card Full Preview">
+        <div class="thumb-nav" id="modal-thumb-nav" style="display: none;">
+          <button class="thumb-nav-btn" id="modal-prev-btn" onclick="modalCycleFrame(-1)">◀</button>
+          <span class="thumb-counter" id="modal-counter">Frame 1 of 1</span>
+          <button class="thumb-nav-btn" id="modal-next-btn" onclick="modalCycleFrame(1)">▶</button>
+        </div>
+      </div>
       <h3 id="modal-title">Title Card</h3>
       <p id="modal-details"></p>
+      <div class="modal-ocr-box" id="modal-ocr-box" style="display: none;"></div>
+
+      <div class="modal-tools">
+        <div class="frame-drawer-row">
+          <label>Capture Time:</label>
+          <input type="text" id="modal-time-input" placeholder="e.g. 74.5 or 01:14">
+          <button class="btn btn-primary btn-sm" onclick="modalCaptureCustom()">Capture Frame</button>
+        </div>
+        <div class="frame-drawer-row">
+          <label>Rescan Window:</label>
+          <input type="text" id="modal-rescan-win" placeholder="e.g. 64-75 or 120-150">
+          <button class="btn btn-secondary btn-sm" onclick="modalRescanFile()">🔄 Rescan File</button>
+        </div>
+      </div>
     </div>
   </div>
 
