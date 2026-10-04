@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 from .metadata import EpisodeInfo
-from .ocr import normalize_for_matching
+from .ocr import has_credit_keywords, normalize_for_matching
 
 STOPWORDS = {"THE", "AND", "FOR", "OF", "A", "AN", "TO", "IN", "ON", "AT", "IS"}
 MIN_OCR_WORD_LEN = 3        # OCR words shorter than this are treated as noise for fuzzy matching
@@ -84,7 +84,7 @@ def token_similarity(title: str, text: str) -> float:
 
 def rank_episodes_for_file(frame_samples: List[Tuple[float, str, str]],
                            episodes: List[EpisodeInfo], min_score: float = 0.0) -> List[Candidate]:
-    \"\"\"Best-scoring frame for every episode, filtered by min_score, sorted best first.\"\"\"
+    """Best-scoring frame for every episode, filtered by min_score, sorted best first."""
     best: Dict[str, Candidate] = {}
     for t, txt, img_path in frame_samples:
         if not txt:
@@ -107,8 +107,13 @@ def find_best_episode_for_file(
 
 
 def is_confident_unique(candidates: List[Candidate], threshold: float = PHRASE_SCORE, margin: float = 0.3) -> bool:
-    \"\"\"True when the top candidate is a near-certain match clearly ahead of the runner-up.\"\"\"
+    """True when the top candidate is a near-certain match clearly ahead of the runner-up."""
     if not candidates or candidates[0][1] < threshold:
+        return False
+    # If the frame contains staff/credit keywords (e.g. Director, Writer, Producer),
+    # do not early exit: keep scanning candidate timestamps to find a clean title card.
+    top_ocr = candidates[0][3] if len(candidates[0]) > 3 else ""
+    if has_credit_keywords(top_ocr):
         return False
     return len(candidates) == 1 or candidates[0][1] - candidates[1][1] >= margin
 
@@ -116,7 +121,7 @@ def is_confident_unique(candidates: List[Candidate], threshold: float = PHRASE_S
 def resolve_global_assignments(
     file_candidates: Dict[str, List[Tuple[EpisodeInfo, float, float, str, str]]]
 ) -> Dict[str, Tuple[EpisodeInfo, float, float, str, str]]:
-    \"\"\"Greedy one-to-one assignment: highest-scoring (file, episode) pairs win first.\"\"\"
+    """Greedy one-to-one assignment: highest-scoring (file, episode) pairs win first."""
     final_mapping = {}
     assigned_episodes = set()
 

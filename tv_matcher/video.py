@@ -58,6 +58,26 @@ def parse_frame_windows(spec: str) -> List[Tuple[float, float, float]]:
     return windows
 
 
+def parse_timestamp_str(val) -> float:
+    """
+    Parses '72.5', '1:15', '01:15.5', or '00:01:15' into seconds as float.
+    Raises ValueError on invalid input.
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    val = str(val).strip()
+    if not val:
+        raise ValueError("Empty timestamp value.")
+    if ":" in val:
+        parts = [float(p) for p in val.split(":")]
+        if len(parts) == 2:
+            return parts[0] * 60.0 + parts[1]
+        elif len(parts) == 3:
+            return parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]
+        raise ValueError(f"Invalid timestamp format '{val}'. Use '72.5' or '01:15'.")
+    return float(val)
+
+
 def build_candidate_timestamps(info: VideoInfo, frame_windows: str = DEFAULT_FRAME_WINDOWS,
                                use_chapters: bool = True, max_frames: int = 80) -> List[float]:
     """
@@ -123,6 +143,7 @@ def extract_frame(video_path: str, timestamp: float, output_path: str,
     ocr_path = ocr_path or f"{base}_ocr.png"
     ocr_inv_path = ocr_inv_path or f"{base}_ocr_inv.png"
     outputs = [output_path, ocr_path, ocr_inv_path]
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
 
     cmd = [
         FFMPEG_BIN, "-nostdin", "-v", "error", "-y",
