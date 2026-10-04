@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TVBackupMatcher GUI</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="top-nav">
+      <div class="nav-brand">
+        <span class="brand-icon">🎬</span>
+        <div>
+          <h1>TVBackupMatcher <span class="badge version">v2.1</span></h1>
+          <p class="subtitle">Automated Video Title Card OCR, Safe Reorganization & Jellyfin / Plex Matching</p>
+        </div>
+      </div>
+      <div class="sys-badges" id="sys-status">
+        <span class="status-pill checking">Checking System Tools...</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="content-body">
+      <!-- Step 1: Configuration Form -->
+      <section class="card config-card" id="config-section">
+        <div class="card-header">
+          <h2>1. Select TV Series Backup Directory</h2>
+          <div id="undo-header-container" style="display: none;">
+            <button class="btn btn-secondary btn-sm" id="btn-undo-header" onclick="undoLastRename()">
+              ↩ Undo Last Rename
+            </button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="form-group">
+            <label for="series-dir">Media Backup Folder Path:</label>
+            <div class="input-with-button">
+              <input type="text" id="series-dir" placeholder="/path/to/TV Shows/Show Name (Year) [tmdbid-1234]" autocomplete="off">
+            </div>
+            <div class="preset-chips" id="recent-chips" style="display: none;">
+              <span class="chip-label">Recent Folders:</span>
+              <div id="recent-chips-list" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></div>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group col">
+              <label for="metadata-source">Metadata Source:</label>
+              <select id="metadata-source">
+                <option value="auto">Auto (Detects [tmdbid-] or [tvdbid-] in folder name)</option>
+                <option value="tvmaze">TVMaze (Free, no key required)</option>
+                <option value="tmdb">TheMovieDB (TMDB - Matches Jellyfin TV default)</option>
+                <option value="local">Local JSON File (Offline)</option>
+              </select>
+            </div>
+            <div class="form-group col">
+              <label for="series-name">Series Title Override <span class="optional">(Optional)</span>:</label>
+              <input type="text" id="series-name" placeholder="Auto-detected from folder name if blank">
+            </div>
+            <div class="form-group col-sm">
+              <label for="tvdb-id">TVDB ID <span class="optional">(Optional)</span>:</label>
+              <input type="text" id="tvdb-id" placeholder="e.g. 76168">
+            </div>
+          </div>
+
+          <div class="advanced-toggle" onclick="toggleAdvanced()">
+            <span id="adv-arrow">▶</span> Advanced Metadata, OCR & Export Settings
+          </div>
+
+          <div class="advanced-panel" id="adv-panel" style="display: none;">
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="tmdb-key">TMDB API Key / Token <span class="optional">(Required only for TMDB source)</span>:</label>
+                <input type="password" id="tmdb-key" placeholder="Enter v3 key or v4 read access token" autocomplete="off">
+              </div>
+              <div class="form-group col">
+                <label for="frame-windows">Frame Sampling Windows (seconds):</label>
+                <input type="text" id="frame-windows" value="64-75" placeholder="e.g. 64-75, 5-20:2">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="export-cards-dir">Title Cards Export Directory <span class="optional">(Optional)</span>:</label>
+                <input type="text" id="export-cards-dir" placeholder="/path/to/Title Cards Gallery">
+              </div>
+              <div class="form-group col">
+                <label for="episodes-file">Local Episodes JSON <span class="optional">(For offline local provider)</span>:</label>
+                <input type="text" id="episodes-file" placeholder="/path/to/episodes.json">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group col">
+                <label for="min-score">Minimum Confidence (0.1 - 0.9):</label>
+                <input type="number" id="min-score" value="0.35" step="0.05" min="0.1" max="0.9">
+              </div>
+              <div class="form-group col">
+                <label for="review-threshold">Review Threshold (Flags matches below this):</label>
+                <input type="number" id="review-threshold" value="0.60" step="0.05" min="0.3" max="0.95">
+              </div>
+              <div class="form-group col">
+                <label for="workers">Parallel Workers:</label>
+                <input type="number" id="workers" value="3" min="1" max="8">
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary" id="btn-scan" onclick="startScan()">
+              <span class="btn-icon">🔍</span> Scan Files & Run Match Analysis
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Step 2: Live Progress & Status -->
+      <section class="card progress-card" id="progress-section" style="display: none;">
+        <div class="card-header">
+          <h2 id="progress-title">2. Processing Title Cards & OCR</h2>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span class="status-indicator live" id="progress-pct">0%</span>
+            <button class="btn btn-secondary btn-sm" id="btn-cancel" onclick="cancelScan()" style="display: none;">Cancel</button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="progress-fill" style="width: 0%;"></div>
+          </div>
+          <p class="status-message" id="status-msg">Initializing...</p>
+        </div>
+      </section>
+
+      <!-- Step 3: Match Results & Interactive Override -->
+      <section class="card results-card" id="results-section" style="display: none;">
+        <div class="card-header results-header">
+          <div>
+            <h2>3. Episode Matches & Review</h2>
+            <p class="subtitle" id="results-summary">Files examined</p>
+            <div id="metadata-badge" class="meta-info-pill" style="display: none;"></div>
+          </div>
+          <div class="filter-controls">
+            <label>Filter:</label>
+            <select id="match-filter" onchange="filterResults()">
+              <option value="all">All Files</option>
+              <option value="ready">Ready to Rename (≥ Review Threshold)</option>
+              <option value="review">Needs Review (< Review Threshold)</option>
+              <option value="overridden">Manually Reassigned</option>
+              <option value="skipped">Skipped / Excluded</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div class="results-grid" id="results-grid">
+            <!-- Dynamically populated cards -->
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Sticky Bottom Action Bar -->
+    <footer class="bottom-action-bar" id="action-bar" style="display: none;">
+      <div class="action-info">
+        <span class="action-stat" id="action-stat">0 files ready to reorganize</span>
+        <label class="action-checkbox" id="unreviewed-wrap">
+          <input type="checkbox" id="include-unreviewed"> Include unreviewed matches (<span id="unreviewed-count">0</span>)
+        </label>
+      </div>
+      <div class="action-buttons">
+        <button class="btn btn-secondary" id="btn-undo-bar" onclick="undoLastRename()" style="display: none;">↩ Undo Last Rename</button>
+        <button class="btn btn-secondary" onclick="resetForm()">Reset</button>
+        <button class="btn btn-success" id="btn-apply" onclick="confirmApply()">
+          <span class="btn-icon">⚡</span> Apply Safe Staged Rename
+        </button>
+      </div>
+    </footer>
+  </div>
+
+  <!-- Modal Dialog for Image Preview -->
+  <div class="modal" id="image-modal" onclick="closeModal()">
+    <div class="modal-content" onclick="event.stopPropagation()">
+      <span class="close-btn" onclick="closeModal()">&times;</span>
+      <img id="modal-img" src="" alt="Title Card Full Preview">
+      <h3 id="modal-title">Title Card</h3>
+      <p id="modal-details"></p>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

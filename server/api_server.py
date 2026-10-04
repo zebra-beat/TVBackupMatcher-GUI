@@ -1,0 +1,209 @@
+import http.server
+import json
+import mimetypes
+import os
+import urllib.parse
+from typing import Optional
+
+from tv_matcher.config import add_recent_dir, get_system_status, load_settings, save_settings
+from tv_matcher.pipeline import MatchingPipeline
+
+IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
+MAX_BODY_BYTES = 1_000_000
+
+
+def _is_within(path: str, root: str) -> bool:
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    return path == root or path.startswith(root + os.sep)
+
+
+class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
+    pipeline: MatchingPipeline = None
+    web_dir: str = ""
+
+    def log_message(self, format, *args):
+        # Silence default access logs to keep terminal output clean
+        pass
+
+    # ------------------------------------------------------------- security
+
+    def _allowed_origins(self):
+        port = self.server.server_address[1]
+        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def _check_host(self) -> bool:
+        """Blocks DNS-rebinding: only accept requests addressed to our own loopback host."""
+        if self.headers.get("Host", "") not in self._allowed_origins():
+            self.send_error(403, "Forbidden host")
+            return False
+        return True
+
+    def _check_post_origin(self) -> bool:
+        """Blocks CSRF: other websites can't send JSON (needs CORS preflight) or spoof Origin."""
+        origin = self.headers.get("Origin")
+        if origin is not None and urllib.parse.urlparse(origin).netloc not in self._allowed_origins():
+            self.send_json({"success": False, "error": "Cross-origin request rejected."}, status=403)
+            return False
+        ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            self.send_json({"success": False, "error": "Content-Type must be application/json."}, status=415)
+            return False
+        return True
+
+    # ------------------------------------------------------------------ GET
+
+    def do_GET(self):
+        if not self._check_host():
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        path = urllib.parse.unquote(parsed.path)
+
+        if path == "/api/status":
+            self.send_json(get_system_status())
+            return
+
+        if path == "/api/state":
+            self.send_json(self.pipeline.get_state())
+            return
+
+        if path == "/api/settings":
+            self.send_json(load_settings())
+            return
+
+        if path == "/api/thumbnail":
+            params = urllib.parse.parse_qs(parsed.query)
+            img_path = params.get("path", [""])[0]
+            ext = os.path.splitext(img_path)[1].lower()
+            # Only frames this app extracted (inside its temp folder) may be served.
+            if (img_path and ext in IMAGE_TYPES and _is_within(img_path, self.pipeline.temp_dir)
+                    and os.path.isfile(img_path)):
+                self.send_file(img_path, IMAGE_TYPES[ext], cache=True)
+                return
+            self.send_error(404, "Image not found")
+            return
+
+        # Static assets from web/ (path traversal safe)
+        file_name = "index.html" if path == "/" else path.lstrip("/")
+        file_path = os.path.join(self.web_dir, file_name)
+        if _is_within(file_path, self.web_dir) and os.path.isfile(file_path):
+            mime_type, _ = mimetypes.guess_type(file_path)
+            self.send_file(file_path, mime_type or "application/octet-stream")
+            return
+
+        self.send_error(404, "Not Found")
+
+    # ----------------------------------------------------------------- POST
+
+    def do_POST(self):
+        if not self._check_host() or not self._check_post_origin():
+            return
+        path = urllib.parse.urlparse(self.path).path
+
+        try:
+            content_len = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            content_len = 0
+        if content_len > MAX_BODY_BYTES:
+            self.send_json({"success": False, "error": "Request too large."}, status=413)
+            return
+        try:
+            body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                raise ValueError
+        except Exception:
+            self.send_json({"success": False, "error": "Invalid JSON body."}, status=400)
+            return
+
+        try:
+            if path == "/api/scan":
+                series_dir = str(data.get("series_dir", "")).strip()
+                if not series_dir:
+                    self.send_json({"success": False, "error": "Series folder is required."}, status=400)
+                    return
+                self.pipeline.start_scan(
+                    series_dir,
+                    series_name=str(data.get("series_name", "")).strip(),
+                    tvdb_id=str(data.get("tvdb_id", "")).strip(),
+                    episodes_file=str(data.get("episodes_file", "")).strip(),
+                    min_score=float(data.get("min_score", 0.35)),
+                    metadata_source=str(data.get("metadata_source", "auto")),
+                    tmdb_api_key=str(data.get("tmdb_api_key", "")).strip(),
+                    frame_windows=str(data.get("frame_windows", "64-75")),
+                    use_chapters=bool(data.get("use_chapters", True)),
+                    workers=int(data.get("workers", 3)),
+                    review_threshold=float(data.get("review_threshold", 0.6)),
+                )
+                add_recent_dir(series_dir)
+                self.send_json({"success": True, "message": "Scan started."})
+
+            elif path == "/api/cancel":
+                self.pipeline.cancel_scan()
+                self.send_json({"success": True})
+
+            elif path == "/api/override":
+                file_path = data.get("file_path", "")
+                episode_code = data.get("episode_code", "")
+                if not file_path or not episode_code:
+                    self.send_json({"success": False, "error": "file_path and episode_code required."}, status=400)
+                    return
+                self.send_json(self.pipeline.set_override(file_path, episode_code))
+
+            elif path == "/api/confirm":
+                self.send_json(self.pipeline.confirm_match(data.get("file_path", "")))
+
+            elif path == "/api/apply":
+                self.send_json(self.pipeline.apply_rename(
+                    export_cards_dir=str(data.get("export_cards_dir", "")).strip(),
+                    include_unreviewed=bool(data.get("include_unreviewed", False)),
+                ))
+
+            elif path == "/api/undo":
+                self.send_json(self.pipeline.undo_last_rename(str(data.get("series_dir", "")).strip()))
+
+            elif path == "/api/settings":
+                self.send_json(save_settings(data))
+
+            else:
+                self.send_error(404, "Not Found")
+
+        except (ValueError, RuntimeError) as e:
+            self.send_json({"success": False, "error": str(e)}, status=400)
+        except Exception as e:
+            self.send_json({"success": False, "error": f"Unexpected error: {e}"}, status=500)
+
+    # -------------------------------------------------------------- helpers
+
+    def send_file(self, file_path: str, content_type: str, cache: bool = False):
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+        except OSError as e:
+            self.send_error(500, f"Error reading file: {e}")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "max-age=3600" if cache else "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(content)
+
+    def send_json(self, data: dict, status: int = 200):
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def run_server(port: int = 8765, web_dir: str = "", pipeline: Optional[MatchingPipeline] = None):
+    GUIRequestHandler.pipeline = pipeline or MatchingPipeline()
+    GUIRequestHandler.web_dir = web_dir
+    server_address = ("127.0.0.1", port)
+    # Threaded so state polling keeps working while a rename or undo request is running.
+    httpd = http.server.ThreadingHTTPServer(server_address, GUIRequestHandler)
+    httpd.daemon_threads = True
+    return httpd
