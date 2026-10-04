@@ -248,5 +248,115 @@ class TestTVBackupMatcher(unittest.TestCase):
         self.assertNotIn(fileB, pipeline.matches)
         self.assertEqual(pipeline.overrides[fileB], SKIP)
 
+    def test_credit_keywords_detection(self):
+        from tv_matcher.ocr import has_credit_keywords
+        self.assertTrue(has_credit_keywords("DIRECTED BY DAN RIBA"))
+        self.assertTrue(has_credit_keywords("Written by Paul Dini & Bruce Timm"))
+        self.assertTrue(has_credit_keywords("Story By Alan Burnett"))
+        self.assertTrue(has_credit_keywords("Executive Producer Jean MacCurdy"))
+        self.assertTrue(has_credit_keywords("Music By Shirley Walker"))
+        self.assertTrue(has_credit_keywords("Animation Director Hiroyuki Aoyama"))
+        self.assertTrue(has_credit_keywords("Starring Kevin Conroy as Batman"))
+
+        # Clean title cards should not be flagged as credits
+        self.assertFalse(has_credit_keywords("The Laughing Fish"))
+        self.assertFalse(has_credit_keywords("On Leather Wings"))
+        self.assertFalse(has_credit_keywords("Heart of Ice"))
+        self.assertFalse(has_credit_keywords("Two-Face (Part 1)"))
+
+    def test_parse_timestamp_str(self):
+        from tv_matcher.video import parse_timestamp_str
+        self.assertEqual(parse_timestamp_str(72.5), 72.5)
+        self.assertEqual(parse_timestamp_str("72.5"), 72.5)
+        self.assertEqual(parse_timestamp_str("1:15"), 75.0)
+        self.assertEqual(parse_timestamp_str("01:15.5"), 75.5)
+        self.assertEqual(parse_timestamp_str("00:02:10"), 130.0)
+        with self.assertRaises(ValueError):
+            parse_timestamp_str("invalid_time")
+
+    def test_credit_frames_do_not_early_exit(self):
+        ep1 = EpisodeInfo(season=1, episode=1, title="The Laughing Fish", code="S01E01")
+        # Candidate frame containing staff credits
+        cand_with_credits = (ep1, 0.95, 65.0, "The Laughing Fish Directed By Dan Riba", "/tmp/credit.jpg")
+        self.assertFalse(is_confident_unique([cand_with_credits]))
+
+        # Clean candidate frame without credits
+        cand_clean = (ep1, 0.95, 70.0, "The Laughing Fish", "/tmp/clean.jpg")
+        self.assertTrue(is_confident_unique([cand_clean]))
+
+    def test_pipeline_set_active_frame(self):
+        pipeline = MatchingPipeline(temp_dir=os.path.join(self.test_dir, "tmp"))
+        ep1 = EpisodeInfo(season=1, episode=1, title="The Laughing Fish", code="S01E01")
+        pipeline.all_episodes = [ep1]
+        fileA = os.path.join(self.test_dir, "a.mkv")
+        with open(fileA, "w") as f: f.write("video")
+        pipeline.files = [fileA]
+
+        # Setup 2 extracted frames for fileA
+        img1 = os.path.join(self.test_dir, "f1.jpg")
+        img2 = os.path.join(self.test_dir, "f2.jpg")
+        with open(img1, "w") as f: f.write("img1")
+        with open(img2, "w") as f: f.write("img2")
+
+        pipeline.file_frames[fileA] = [
+            {"timestamp": 65.0, "image_path": img1, "ocr_text": "Directed by Dan Riba", "score": 0.4, "has_credits": True, "episode_code": ""},
+            {"timestamp": 70.0, "image_path": img2, "ocr_text": "The Laughing Fish", "score": 0.95, "has_credits": False, "episode_code": "S01E01"}
+        ]
+        pipeline.matches[fileA] = {
+            "episode": ep1,
+            "score": 0.4,
+            "timestamp": 65.0,
+            "ocr_text": "Directed by Dan Riba",
+            "image_path": img1,
+            "confirmed": False,
+            "manual": False,
+        }
+
+        # Switch active frame to 70.0s
+        res = pipeline.set_active_frame(fileA, 70.0)
+        self.assertTrue(res["success"])
+        self.assertEqual(pipeline.matches[fileA]["timestamp"], 70.0)
+        self.assertEqual(pipeline.matches[fileA]["image_path"], img2)
+        self.assertGreaterEqual(pipeline.matches[fileA]["score"], 0.9)
+        self.assertTrue(pipeline.matches[fileA]["confirmed"])
+
+        # Check get_state exposes available_frames and has_credits
+        state = pipeline.get_state()
+        match_item = state["matches"][0]
+        self.assertEqual(match_item["frame_count"], 2)
+        self.assertEqual(len(match_item["available_frames"]), 2)
+        self.assertFalse(match_item["has_credits"])
+        self.assertEqual(match_item["active_frame_index"], 1)
+
+    def test_pipeline_rescan_single_file_mocked(self):
+        pipeline = MatchingPipeline(temp_dir=os.path.join(self.test_dir, "tmp"))
+        ep1 = EpisodeInfo(season=1, episode=1, title="Episode 1", code="S01E01")
+        ep2 = EpisodeInfo(season=1, episode=2, title="Episode 2", code="S01E02")
+        pipeline.all_episodes = [ep1, ep2]
+        fileA = os.path.join(self.test_dir, "a.mkv")
+        fileB = os.path.join(self.test_dir, "b.mkv")
+        with open(fileA, "w") as f: f.write("a")
+        with open(fileB, "w") as f: f.write("b")
+        pipeline.files = [fileA, fileB]
+
+        # fileB starts matched to ep2
+        pipeline.matches[fileB] = {"episode": ep2, "score": 0.9, "timestamp": 65.0, "ocr_text": "Ep2", "image_path": "", "confirmed": True, "manual": False}
+
+        # Mock _analyze_file to return a new candidate for fileA
+        pipeline._analyze_file = lambda idx, fp, params, sdir: (
+            [(ep1, 0.95, 75.0, "Episode 1", "/tmp/mock.jpg")],
+            1200.0,
+            [{"timestamp": 75.0, "image_path": "/tmp/mock.jpg", "ocr_text": "Episode 1", "score": 0.95, "has_credits": False, "episode_code": "S01E01"}]
+        )
+
+        res = pipeline.rescan_single_file(fileA, frame_windows="70-80")
+        self.assertTrue(res["success"])
+        self.assertIn(fileA, pipeline.matches)
+        self.assertEqual(pipeline.matches[fileA]["episode"].code, "S01E01")
+        self.assertEqual(pipeline.matches[fileA]["timestamp"], 75.0)
+
+        # Ensure fileB remains untouched
+        self.assertEqual(pipeline.matches[fileB]["episode"].code, "S01E02")
+
 if __name__ == "__main__":
     unittest.main()
