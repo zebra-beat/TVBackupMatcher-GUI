@@ -108,6 +108,83 @@
                 <input type="number" id="workers" value="3" min="1" max="8">
               </div>
             </div>
+
+            <!-- Sonarr / Radarr Release Tags -->
+            <div class="settings-group-header">🏷️ Sonarr &amp; Radarr Auto-Detection Tags</div>
+            <div class="form-row">
+              <div class="form-group col">
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="sonarr-enabled" checked onchange="saveSonarrOptions()">
+                  Include Sonarr/Radarr Release Tags in Filenames
+                </label>
+              </div>
+              <div class="form-group col">
+                <label for="sonarr-style">Tag Style:</label>
+                <select id="sonarr-style" onchange="saveSonarrOptions()">
+                  <option value="brackets">[Tags] e.g. [2160p UHD BluRay Remux HEVC DV HDR10 TrueHD 7.1]</option>
+                  <option value="hyphen">- Tags e.g. - 2160p UHD BluRay Remux HEVC DV HDR10 TrueHD 7.1</option>
+                  <option value="none">Disabled</option>
+                </select>
+              </div>
+              <div class="form-group col">
+                <label for="sonarr-source">Release Source / Tier:</label>
+                <select id="sonarr-source" onchange="saveSonarrOptions()">
+                  <option value="auto">Auto (UHD BluRay Remux / BluRay Remux / DVD Remux)</option>
+                  <option value="UHD BluRay Remux">UHD BluRay Remux</option>
+                  <option value="BluRay Remux">BluRay Remux</option>
+                  <option value="Remux">Remux</option>
+                  <option value="BluRay">BluRay</option>
+                  <option value="none">None (Omit Source)</option>
+                </select>
+              </div>
+            </div>
+            <div class="tag-sub-options" id="tag-sub-options">
+              <label class="checkbox-inline">
+                <input type="checkbox" id="tag-inc-res" checked onchange="saveSonarrOptions()"> Resolution
+              </label>
+              <label class="checkbox-inline">
+                <input type="checkbox" id="tag-inc-codec" checked onchange="saveSonarrOptions()"> Codec (HEVC/AVC)
+              </label>
+              <label class="checkbox-inline">
+                <input type="checkbox" id="tag-inc-hdr" checked onchange="saveSonarrOptions()"> Dynamic Range / HDR
+              </label>
+              <label class="checkbox-inline">
+                <input type="checkbox" id="tag-inc-audio" checked onchange="saveSonarrOptions()"> Audio (TrueHD Atmos / DTS-HD)
+              </label>
+              <div style="display:inline-flex; align-items:center; gap:6px;">
+                <label for="tag-dv-prof" style="margin:0; font-size:12px; color:var(--text-secondary);">DV Profile Tag:</label>
+                <select id="tag-dv-prof" style="padding:2px 6px; font-size:12px;" onchange="saveSonarrOptions()">
+                  <option value="full">Full (Profile 8.1)</option>
+                  <option value="short">Short (P8.1)</option>
+                  <option value="none">Omit Profile Number</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Dolby Vision (dovi_convert) Settings -->
+            <div class="settings-group-header">⚡ Dolby Vision Conversion (dovi_convert)</div>
+            <div class="form-row">
+              <div class="form-group col">
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="dovi-auto-convert" onchange="saveDoviAutoConvert()">
+                  Auto-convert all Profile 7 files to Profile 8.1 on rename (Apple TV / Infuse Compatibility)
+                </label>
+              </div>
+              <div class="form-group col">
+                <label for="dovi-mode">Conversion Mode:</label>
+                <select id="dovi-mode" onchange="saveDoviOptions()">
+                  <option value="standard">Standard (Fast in-place remux)</option>
+                  <option value="safe">Safe (Validates RPU synchronization)</option>
+                </select>
+              </div>
+              <div class="form-group col">
+                <label class="checkbox-inline" style="margin-top:22px;">
+                  <input type="checkbox" id="dovi-backup" onchange="saveDoviOptions()">
+                  Keep .dovi Enhancement Layer Backup archive
+                </label>
+              </div>
+            </div>
+            <div id="dovi-install-hint" class="dovi-hint-box" style="display:none;"></div>
           </div>
 
           <div class="form-actions">
@@ -156,6 +233,7 @@
         </div>
 
         <div class="card-body">
+          <div id="dovi-banner" class="dovi-banner" style="display: none;"></div>
           <div class="results-grid" id="results-grid">
             <!-- Dynamically populated cards -->
           </div>

@@ -16,12 +16,16 @@ async function checkSystemStatus() {
     const container = document.getElementById("sys-status");
     container.innerHTML = "";
 
-    const tools = ["ffmpeg", "ffprobe", "tesseract"];
+    const tools = ["ffmpeg", "ffprobe", "tesseract", "dovi_convert"];
     tools.forEach(tool => {
       const info = data[tool];
       const pill = document.createElement("span");
-      pill.className = `status-pill ${info && info.available ? "online" : "offline"}`;
-      pill.textContent = `${tool}: ${info && info.available ? "Ready" : "Missing"}`;
+      const isDovi = (tool === "dovi_convert");
+      const avail = Boolean(info && info.available);
+      pill.className = `status-pill ${avail ? "online" : (isDovi ? "checking" : "offline")}`;
+      pill.textContent = isDovi
+        ? `dovi_convert: ${avail ? "Ready" : "Optional"}`
+        : `${tool}: ${avail ? "Ready" : "Missing"}`;
       container.appendChild(pill);
     });
 
@@ -49,6 +53,55 @@ async function loadUserSettings() {
     if (s.review_threshold) document.getElementById("review-threshold").value = s.review_threshold;
     if (s.workers) document.getElementById("workers").value = s.workers;
 
+    // Sonarr & Radarr tags
+    if (s.sonarr_tags_enabled !== undefined && document.getElementById("sonarr-enabled")) {
+      document.getElementById("sonarr-enabled").checked = s.sonarr_tags_enabled;
+    }
+    if (s.sonarr_style && document.getElementById("sonarr-style")) {
+      document.getElementById("sonarr-style").value = s.sonarr_style;
+    }
+    if (s.sonarr_source && document.getElementById("sonarr-source")) {
+      document.getElementById("sonarr-source").value = s.sonarr_source;
+    }
+    if (s.sonarr_include_resolution !== undefined && document.getElementById("tag-inc-res")) {
+      document.getElementById("tag-inc-res").checked = s.sonarr_include_resolution;
+    }
+    if (s.sonarr_include_codec !== undefined && document.getElementById("tag-inc-codec")) {
+      document.getElementById("tag-inc-codec").checked = s.sonarr_include_codec;
+    }
+    if (s.sonarr_include_hdr !== undefined && document.getElementById("tag-inc-hdr")) {
+      document.getElementById("tag-inc-hdr").checked = s.sonarr_include_hdr;
+    }
+    if (s.sonarr_include_audio !== undefined && document.getElementById("tag-inc-audio")) {
+      document.getElementById("tag-inc-audio").checked = s.sonarr_include_audio;
+    }
+    if (s.sonarr_dv_profile_tag && document.getElementById("tag-dv-prof")) {
+      document.getElementById("tag-dv-prof").value = s.sonarr_dv_profile_tag;
+    }
+
+    // Dolby Vision settings
+    if (s.dovi_auto_convert_p7 !== undefined && document.getElementById("dovi-auto-convert")) {
+      document.getElementById("dovi-auto-convert").checked = s.dovi_auto_convert_p7;
+    }
+    if (s.dovi_convert_mode && document.getElementById("dovi-mode")) {
+      document.getElementById("dovi-mode").value = s.dovi_convert_mode;
+    }
+
+    // Check dovi_convert binary status
+    try {
+      const doviRes = await fetch("/api/dovi/status");
+      const doviData = await doviRes.json();
+      const hintBox = document.getElementById("dovi-install-hint");
+      if (hintBox) {
+        if (!doviData.available) {
+          hintBox.style.display = "block";
+          hintBox.textContent = "ℹ️ dovi_convert not detected on this system.\nTo convert Dolby Vision Profile 7 to 8.1:\nbrew tap cryptochrome/dovi_convert && brew install dovi_convert";
+        } else {
+          hintBox.style.display = "none";
+        }
+      }
+    } catch (_) {}
+
     // Populate recent directories
     if (s.recent_dirs && s.recent_dirs.length > 0) {
       const dirInput = document.getElementById("series-dir");
@@ -59,6 +112,118 @@ async function loadUserSettings() {
     }
   } catch (err) {
     console.error("Failed to load user settings:", err);
+  }
+}
+
+async function saveSonarrOptions() {
+  const enabled = document.getElementById("sonarr-enabled").checked;
+  const subWrap = document.getElementById("tag-sub-options");
+  if (subWrap) subWrap.style.opacity = enabled ? "1" : "0.5";
+
+  const payload = {
+    enabled: enabled,
+    style: document.getElementById("sonarr-style").value,
+    source: document.getElementById("sonarr-source").value,
+    include_resolution: document.getElementById("tag-inc-res").checked,
+    include_codec: document.getElementById("tag-inc-codec").checked,
+    include_hdr: document.getElementById("tag-inc-hdr").checked,
+    include_audio: document.getElementById("tag-inc-audio").checked,
+    dv_profile_tag: document.getElementById("tag-dv-prof").value,
+  };
+  try {
+    await fetch("/api/sonarr/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    // Save to user settings as well
+    fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sonarr_tags_enabled: payload.enabled,
+        sonarr_style: payload.style,
+        sonarr_source: payload.source,
+        sonarr_include_resolution: payload.include_resolution,
+        sonarr_include_codec: payload.include_codec,
+        sonarr_include_hdr: payload.include_hdr,
+        sonarr_include_audio: payload.include_audio,
+        sonarr_dv_profile_tag: payload.dv_profile_tag,
+      })
+    });
+    lastRenderedVersion = -1;
+    pollState();
+  } catch (err) {
+    console.error("Failed to save Sonarr options:", err);
+  }
+}
+
+async function saveDoviOptions() {
+  const payload = {
+    mode: document.getElementById("dovi-mode").value,
+    backup: document.getElementById("dovi-backup").checked,
+  };
+  try {
+    await fetch("/api/dovi/options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dovi_convert_mode: payload.mode })
+    });
+  } catch (err) {
+    console.error("Failed to save Dovi options:", err);
+  }
+}
+
+async function saveDoviAutoConvert() {
+  const autoConvert = document.getElementById("dovi-auto-convert").checked;
+  try {
+    await fetch("/api/dovi/auto_convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_convert: autoConvert })
+    });
+    fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dovi_auto_convert_p7: autoConvert })
+    });
+    lastRenderedVersion = -1;
+    pollState();
+  } catch (err) {
+    console.error("Failed to set Dovi auto convert:", err);
+  }
+}
+
+async function toggleDoviConvert(filePath, convert) {
+  try {
+    await fetch("/api/dovi/set_convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_path: filePath, convert: convert })
+    });
+    lastRenderedVersion = -1;
+    pollState();
+  } catch (err) {
+    console.error("Failed to toggle Dovi convert:", err);
+  }
+}
+
+async function setAllDoviConvert(convert) {
+  try {
+    await fetch("/api/dovi/set_all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ convert: convert })
+    });
+    lastRenderedVersion = -1;
+    pollState();
+  } catch (err) {
+    console.error("Failed to set all Dovi convert:", err);
   }
 }
 
@@ -257,6 +422,26 @@ function updateUI(data) {
     document.getElementById("unreviewed-count").textContent = needsReview;
     document.getElementById("unreviewed-wrap").style.display = needsReview > 0 ? "inline-flex" : "none";
 
+    // Dolby Vision Profile 7 banner
+    const doviBanner = document.getElementById("dovi-banner");
+    if (doviBanner) {
+      if (counts.dv_p7_total && counts.dv_p7_total > 0) {
+        doviBanner.style.display = "flex";
+        doviBanner.innerHTML = `
+          <div class="dovi-banner-text">
+            <span style="font-size:18px;">⚡</span>
+            <span><strong>Dolby Vision Profile 7 Detected:</strong> Found <strong>${counts.dv_p7_total}</strong> UHD Blu-ray file(s). <strong>${counts.dv_p7_convert || 0}</strong> queued for Apple TV / Infuse Profile 8.1 conversion.</span>
+          </div>
+          <div class="dovi-banner-actions">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDoviConvert(true)">⚡ Convert All to Profile 8.1</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="setAllDoviConvert(false)">Keep Profile 7</button>
+          </div>
+        `;
+      } else {
+        doviBanner.style.display = "none";
+      }
+    }
+
     // Only re-render cards if data version changed
     if (data.version !== lastRenderedVersion) {
       renderCards(data.matches, data.available_episodes, data.review_threshold || 0.60);
@@ -358,6 +543,42 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     origFn.textContent = item.file_name;
     content.appendChild(origFn);
 
+    // Media Info Badges (Resolution, Codec, HDR/DV, Audio)
+    if (item.media_info) {
+      const mb = document.createElement("div");
+      mb.className = "media-badges";
+      if (item.media_info.resolution) {
+        const p = document.createElement("span");
+        p.className = "media-pill res";
+        p.textContent = item.media_info.resolution;
+        mb.appendChild(p);
+      }
+      if (item.media_info.video_codec) {
+        const p = document.createElement("span");
+        p.className = "media-pill codec";
+        p.textContent = item.media_info.video_codec;
+        mb.appendChild(p);
+      }
+      if (item.media_info.is_dovi || item.has_dv_p7) {
+        const p = document.createElement("span");
+        p.className = `media-pill dovi ${item.has_dv_p7 ? "dovi-p7" : ""}`;
+        p.textContent = item.convert_dv_p7 ? "DV Profile 8.1" : (item.media_info.dv_profile_name || "Dolby Vision");
+        mb.appendChild(p);
+      } else if (item.media_info.hdr_format && item.media_info.hdr_format !== "SDR") {
+        const p = document.createElement("span");
+        p.className = "media-pill hdr";
+        p.textContent = item.media_info.hdr_format;
+        mb.appendChild(p);
+      }
+      if (item.media_info.audio_title) {
+        const p = document.createElement("span");
+        p.className = "media-pill audio";
+        p.textContent = item.media_info.audio_title;
+        mb.appendChild(p);
+      }
+      content.appendChild(mb);
+    }
+
     // Match Header Row
     const matchRow = document.createElement("div");
     matchRow.className = "match-row";
@@ -376,6 +597,27 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     matchRow.appendChild(scorePill);
 
     content.appendChild(matchRow);
+
+    // Dolby Vision Profile 7 -> 8.1 conversion toggle
+    if (item.has_dv_p7) {
+      const doviWrap = document.createElement("label");
+      doviWrap.className = "dovi-toggle-wrap";
+      doviWrap.title = "Convert Dolby Vision Profile 7 (Blu-ray MEL/FEL) to Profile 8.1 for Apple TV / Infuse playback compatibility";
+      const doviChk = document.createElement("input");
+      doviChk.type = "checkbox";
+      doviChk.checked = Boolean(item.convert_dv_p7);
+      doviChk.onchange = (e) => toggleDoviConvert(item.file_path, e.target.checked);
+
+      const doviLabel = document.createElement("span");
+      doviLabel.className = `dovi-convert-badge ${item.convert_dv_p7 ? "converted" : ""}`;
+      doviLabel.textContent = item.convert_dv_p7
+        ? "✓ Will convert DV Profile 7 → 8.1 (Universal / Apple TV)"
+        : "⚡ Convert DV Profile 7 → 8.1 (Universal / Apple TV)";
+
+      doviWrap.appendChild(doviChk);
+      doviWrap.appendChild(doviLabel);
+      content.appendChild(doviWrap);
+    }
 
     // Target Path Preview
     if (item.target_relpath) {

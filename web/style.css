@@ -811,3 +811,186 @@ select:focus {
   margin-top: 12px;
   flex-wrap: wrap;
 }
+
+/* Settings Group Headers & Inlines */
+.settings-group-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 14px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checkbox-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.checkbox-inline input[type="checkbox"] {
+  accent-color: var(--color-blue);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.tag-sub-options {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-top: 4px;
+}
+
+/* Media Info Badges on Cards */
+.media-badges {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 4px 0 2px;
+}
+
+.media-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.media-pill.res {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.media-pill.codec {
+  background: rgba(107, 114, 128, 0.25);
+  color: #d1d5db;
+  border: 1px solid rgba(156, 163, 175, 0.25);
+}
+
+.media-pill.hdr {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.media-pill.dovi {
+  background: rgba(139, 92, 246, 0.25);
+  color: #ddd6fe;
+  border: 1px solid rgba(139, 92, 246, 0.5);
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.2);
+}
+
+.media-pill.dovi-p7 {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.3), rgba(236, 72, 153, 0.3));
+  color: #fbcfe8;
+  border: 1px solid rgba(236, 72, 153, 0.5);
+  font-weight: 800;
+}
+
+.media-pill.audio {
+  background: rgba(16, 185, 129, 0.15);
+  color: #a7f3d0;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Dolby Vision Card Toggle */
+.dovi-toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(139, 92, 246, 0.12);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  margin-top: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.dovi-toggle-wrap:hover {
+  background: rgba(139, 92, 246, 0.2);
+  border-color: rgba(139, 92, 246, 0.6);
+}
+
+.dovi-toggle-wrap input[type="checkbox"] {
+  accent-color: var(--color-purple);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+.dovi-convert-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: #e9d5ff;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dovi-convert-badge.converted {
+  color: #86efac;
+}
+
+/* Dolby Vision Banner above results */
+.dovi-banner {
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(59, 130, 246, 0.15));
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dovi-banner-text {
+  font-size: 13px;
+  color: #f3f4f6;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dovi-banner-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.dovi-hint-box {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #fde68a;
+  white-space: pre-wrap;
+  font-family: monospace;
+}
+
+/* Sonarr Tag Preview inside target path */
+.sonarr-tag-preview {
+  color: #60a5fa;
+  font-weight: 600;
+}
+

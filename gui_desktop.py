@@ -110,6 +110,34 @@ class TVBackupMatcherDesktopApp:
         self.workers_spin.set(str(self.settings.get("workers", 3)))
         self.workers_spin.pack(side=tk.LEFT)
 
+        # Sonarr / Radarr tags and Dolby Vision row
+        tag_row = ttk.Frame(cfg_frame)
+        tag_row.pack(fill=tk.X, pady=(6, 0))
+
+        self.sonarr_tags_var = tk.BooleanVar(value=bool(self.settings.get("sonarr_tags_enabled", True)))
+        self.sonarr_chk = ttk.Checkbutton(
+            tag_row, text="Sonarr/Radarr Release Tags",
+            variable=self.sonarr_tags_var, command=self._on_sonarr_toggle
+        )
+        self.sonarr_chk.pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(tag_row, text="Source:").pack(side=tk.LEFT, padx=(0, 4))
+        self.sonarr_source_combo = ttk.Combobox(
+            tag_row,
+            values=["auto", "UHD BluRay Remux", "BluRay Remux", "Remux", "BluRay", "none"],
+            state="readonly", width=14
+        )
+        self.sonarr_source_combo.set(self.settings.get("sonarr_source", "auto"))
+        self.sonarr_source_combo.pack(side=tk.LEFT, padx=(0, 12))
+        self.sonarr_source_combo.bind("<<ComboboxSelected>>", lambda e: self._on_sonarr_toggle())
+
+        self.dovi_auto_var = tk.BooleanVar(value=bool(self.settings.get("dovi_auto_convert_p7", False)))
+        self.dovi_auto_chk = ttk.Checkbutton(
+            tag_row, text="⚡ Auto-convert DV Profile 7 -> 8.1 (Apple TV)",
+            variable=self.dovi_auto_var, command=self._on_dovi_auto_toggle
+        )
+        self.dovi_auto_chk.pack(side=tk.LEFT)
+
         # 3. Progress Frame
         prog_frame = ttk.Frame(main_frame)
         prog_frame.pack(fill=tk.X, pady=(0, 10))
@@ -128,21 +156,23 @@ class TVBackupMatcherDesktopApp:
         tree_frame = ttk.LabelFrame(paned, text="2. Matched Episode Files (Click row to inspect preview)", padding="8")
         paned.add(tree_frame, weight=3)
 
-        cols = ("code", "title", "score", "status", "target", "filename")
+        cols = ("code", "title", "score", "format", "status", "target", "filename")
         self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings", selectmode="browse")
         self.tree.heading("code", text="Episode")
         self.tree.heading("title", text="Identified Title")
         self.tree.heading("score", text="Score")
+        self.tree.heading("format", text="Media / DV")
         self.tree.heading("status", text="Status")
         self.tree.heading("target", text="Proposed Plex / Jellyfin Target")
         self.tree.heading("filename", text="Source File")
 
         self.tree.column("code", width=70, anchor=tk.CENTER)
-        self.tree.column("title", width=190, anchor=tk.W)
+        self.tree.column("title", width=180, anchor=tk.W)
         self.tree.column("score", width=55, anchor=tk.CENTER)
+        self.tree.column("format", width=125, anchor=tk.CENTER)
         self.tree.column("status", width=95, anchor=tk.CENTER)
         self.tree.column("target", width=220, anchor=tk.W)
-        self.tree.column("filename", width=180, anchor=tk.W)
+        self.tree.column("filename", width=170, anchor=tk.W)
 
         tree_scroll = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=tree_scroll.set)
@@ -178,6 +208,23 @@ class TVBackupMatcherDesktopApp:
 
         self.confirm_btn = ttk.Button(btn_row, text="✓ Confirm Match", command=self._confirm_match)
         self.confirm_btn.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Dolby Vision Profile 7 Conversion Panel
+        self.dovi_frame = ttk.LabelFrame(detail_frame, text="⚡ Dolby Vision Profile 7", padding="6")
+        self.dovi_file_var = tk.BooleanVar(value=False)
+        self.dovi_file_chk = ttk.Checkbutton(
+            self.dovi_frame,
+            text="Convert to Profile 8.1 (Apple TV / Infuse)",
+            variable=self.dovi_file_var,
+            command=self._on_file_dovi_toggle
+        )
+        self.dovi_file_chk.pack(anchor=tk.W, pady=(0, 2))
+        self.dovi_all_btn = ttk.Button(
+            self.dovi_frame,
+            text="Convert All DV P7 -> 8.1",
+            command=lambda: self._set_all_dovi(True)
+        )
+        self.dovi_all_btn.pack(fill=tk.X, pady=(2, 0))
 
         # Frame Cycler Row
         frame_nav_box = ttk.Frame(detail_frame)
@@ -242,11 +289,40 @@ class TVBackupMatcherDesktopApp:
 
     def _check_dependencies(self):
         status = get_system_status()
-        if status["ready"]:
-            self.status_badge.config(text="✓ System Tools Ready", foreground="green")
+        dovi_avail = status.get("dovi_convert", {}).get("available", False)
+        status_text = "✓ Tools Ready" if status["ready"] else "✗ Missing ffmpeg/tesseract"
+        if dovi_avail:
+            status_text += " | DV 8.1 Ready"
         else:
-            self.status_badge.config(text="✗ Missing ffmpeg/tesseract", foreground="red")
+            status_text += " | DV Optional"
+        self.status_badge.config(text=status_text, foreground="green" if status["ready"] else "red")
+        if not status["ready"]:
             messagebox.showwarning("Missing Tools", "ffmpeg, ffprobe, or tesseract not found.\nInstall via: brew install ffmpeg tesseract")
+
+    def _on_sonarr_toggle(self):
+        enabled = self.sonarr_tags_var.get()
+        source = self.sonarr_source_combo.get()
+        self.pipeline.set_tag_options({"enabled": enabled, "source": source})
+        save_settings({"sonarr_tags_enabled": enabled, "sonarr_source": source})
+        self._populate_results(self.pipeline.get_state())
+
+    def _on_dovi_auto_toggle(self):
+        auto_conv = self.dovi_auto_var.get()
+        self.pipeline.set_dovi_auto_convert(auto_conv)
+        save_settings({"dovi_auto_convert_p7": auto_conv})
+        self._populate_results(self.pipeline.get_state())
+
+    def _on_file_dovi_toggle(self):
+        if not self._selected_file_path:
+            return
+        conv = self.dovi_file_var.get()
+        self.pipeline.set_file_dovi_convert(self._selected_file_path, conv)
+        self._populate_results(self.pipeline.get_state())
+
+    def _set_all_dovi(self, conv: bool):
+        self.pipeline.set_all_dovi_convert(conv)
+        self.dovi_file_var.set(conv)
+        self._populate_results(self.pipeline.get_state())
 
     def _browse_folder(self):
         init_dir = self.dir_entry.get().strip() or os.path.expanduser("~")
@@ -288,6 +364,9 @@ class TVBackupMatcherDesktopApp:
             "frame_windows": self.win_entry.get().strip(),
             "export_cards_dir": self.export_entry.get().strip(),
             "workers": int(self.workers_spin.get() or 3),
+            "sonarr_tags_enabled": self.sonarr_tags_var.get(),
+            "sonarr_source": self.sonarr_source_combo.get(),
+            "dovi_auto_convert_p7": self.dovi_auto_var.get(),
         })
         add_recent_dir(target_dir)
 
@@ -306,6 +385,8 @@ class TVBackupMatcherDesktopApp:
         workers = int(self.workers_spin.get() or 3)
 
         try:
+            self.pipeline.set_tag_options({"enabled": self.sonarr_tags_var.get(), "source": self.sonarr_source_combo.get()})
+            self.pipeline.set_dovi_auto_convert(self.dovi_auto_var.get())
             self.pipeline.start_scan(
                 target_dir,
                 series_name=name_override,
@@ -355,15 +436,33 @@ class TVBackupMatcherDesktopApp:
         for item in matches:
             score_str = f"{int(item['score'] * 100)}%" if item["score"] > 0 else "--"
             status_str = "Needs Review" if item["needs_review"] else ("Manual" if item["is_overridden"] else ("Skipped" if item["status"] == "skipped" else "Ready"))
+
+            # Format info
+            media = item.get("media_info") or {}
+            fmt_parts = []
+            if media.get("resolution"):
+                fmt_parts.append(media["resolution"])
+            if media.get("video_codec"):
+                fmt_parts.append(media["video_codec"])
+            if item.get("convert_dv_p7"):
+                fmt_parts.append("DV P8.1")
+            elif media.get("dv_profile_name"):
+                fmt_parts.append(media["dv_profile_name"])
+            elif media.get("hdr_format") and media["hdr_format"] != "SDR":
+                fmt_parts.append(media["hdr_format"])
+            fmt_str = " ".join(fmt_parts) if fmt_parts else "--"
+
             row_id = self.tree.insert(
                 "",
                 tk.END,
-                values=(item["episode_code"] or "--", item["episode_title"], score_str, status_str, item.get("target_relpath") or "(None)", item["file_name"])
+                values=(item["episode_code"] or "--", item["episode_title"], score_str, fmt_str, status_str, item.get("target_relpath") or "(None)", item["file_name"])
             )
             self.tree.item(row_id, tags=(item["file_path"], item.get("image_path", ""), str(item["needs_review"]), item.get("warning", "")))
 
         counts = state.get("counts", {})
         summary = f"Total: {len(matches)} files. Ready: {counts.get('will_rename', 0)}, Needs Review: {counts.get('needs_review', 0)}, Unmatched: {counts.get('unmatched', 0)}."
+        if counts.get("dv_p7_total"):
+            summary += f" | ⚡ DV Profile 7: {counts.get('dv_p7_total')} ({counts.get('dv_p7_convert', 0)} to P8.1)"
         self.status_lbl.config(text=summary)
 
     def _on_tree_select(self, event):
@@ -398,6 +497,13 @@ class TVBackupMatcherDesktopApp:
         active_idx = m_item.get("active_frame_index", 0) if m_item else 0
         timestamp = m_item.get("timestamp", 0.0) if m_item else 0.0
         has_credits = m_item.get("has_credits", False) if m_item else False
+
+        # Show or hide Dolby Vision Profile 7 frame
+        if m_item and m_item.get("has_dv_p7"):
+            self.dovi_file_var.set(bool(m_item.get("convert_dv_p7", False)))
+            self.dovi_frame.pack(fill=tk.X, pady=(6, 2))
+        else:
+            self.dovi_frame.pack_forget()
 
         if len(available_frames) > 1:
             self.prev_frame_btn.config(state=tk.NORMAL)

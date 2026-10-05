@@ -42,6 +42,14 @@ python3 app.py
 * **Jellyfin, Plex & Sonarr Optimized Naming**:
   * Formats files as: `Show Name (Year) - S01E01 - Episode Title.mkv` inside `Season 01/` or `Specials/` (for Season 0).
   * Auto-detects and respects series ID tags in folder names (`[tmdbid-4303]` or `{tvdb-76168}`).
+* **Sonarr & Radarr Auto-Detection Tags**:
+  * Automatically inspects video resolution, video codec, HDR formats (HDR10, HDR10+, DV), and master audio tracks via `ffprobe`.
+  * Generates standardized quality tags in bracketed suffix format (e.g. `[2160p UHD BluRay Remux HEVC DV Profile 8.1 HDR10 TrueHD Atmos 7.1]`), enabling Sonarr / Radarr to immediately detect and classify quality profiles without contaminating episode titles in Plex or Jellyfin.
+* **Dolby Vision Profile 7 → 8.1 Conversion (`dovi_convert`)**:
+  * Auto-detects 4K UHD Blu-ray Dolby Vision Profile 7 (MEL and FEL).
+  * Seamlessly integrates with [cryptochrome/dovi_convert](https://github.com/cryptochrome/dovi_convert) to convert Profile 7 backups to Profile 8.1 prior to staging.
+  * Ensures flawless playback compatibility across Apple TV 4K (Infuse, Plex, Jellyfin) and other single-layer Dolby Vision players.
+  * Preserves original files via `.bak.dovi_convert` or compact `.dovi` enhancement layer backup archives.
 * **Multi-Provider Metadata**:
   * **Auto**: Uses folder ID tags or falls back to public providers.
   * **TheMovieDB (TMDB)**: Matches Jellyfin's default TV numbering.
@@ -69,10 +77,15 @@ python3 app.py
 1. **macOS** (Apple Silicon or Intel)
 2. **Python 3.8+** (included with macOS Command Line Tools)
 3. **ffmpeg**, **ffprobe**, and **tesseract**
+4. *(Optional for Dolby Vision Profile 7 conversion)* **dovi_convert**
 
 If not already installed, install them via Homebrew:
 ```bash
 brew install ffmpeg tesseract
+
+# Optional: For Dolby Vision Profile 7 to 8.1 conversion:
+brew tap cryptochrome/dovi_convert
+brew install dovi_convert
 ```
 
 ---
@@ -83,18 +96,20 @@ brew install ffmpeg tesseract
    * Enter or browse to your TV show backup directory (e.g. `/Volumes/Backups/TV Shows/Superman The Animated Series (1996) [tmdbid-4303]`).
 2. **Configure Settings (Optional)**:
    * Select metadata provider (Auto, TVMaze, TMDB, or Local).
-   * Enter your TMDB API key if using TMDB directly.
-   * Adjust frame search windows (default `64-75` seconds).
+   * Toggle Sonarr / Radarr release tags and customize release source tier.
+   * Toggle automatic conversion of Dolby Vision Profile 7 files to Profile 8.1.
 3. **Start Analysis**:
    * Click **"Scan Files & Run Match Analysis"**.
-   * Parallel worker threads analyze video chapter markers, extract frames, run multi-pass OCR, and resolve global assignments.
+   * Parallel worker threads analyze video chapter markers, extract frames, run multi-pass OCR, inspect media streams, and resolve global assignments.
 4. **Review & Confirm**:
-   * Inspect extracted title cards against matched episode names.
+   * Inspect extracted title cards against matched episode names and view media tags (`2160p`, `HEVC`, `DV Profile 7`, `TrueHD Atmos 7.1`).
+   * Toggle Profile 7 to 8.1 conversion on individual episodes or click **"Convert All to Profile 8.1"**.
    * Review any flagged items (confidence below threshold or duration discrepancy).
    * Click **"Confirm Match"** or reassign via the dropdown selector.
 5. **Apply Safe Rename**:
    * Click **"Apply Safe Staged Rename"**.
-   * Files are organized cleanly into `Season 01/`, `Season 02/` folders.
+   * If DV conversion is selected, files are remuxed to Profile 8.1 before staging.
+   * Files are organized cleanly into `Season 01/`, `Season 02/` folders with Plex / Jellyfin and Sonarr compatible filenames.
    * If you ever want to revert, simply click **"Undo Last Rename"**.
 
 ---
@@ -108,9 +123,11 @@ TVBackupMatcher-GUI/
 ├── gui_desktop.py                      # Native macOS desktop GUI (Tkinter)
 ├── app.py                              # Web application server launcher
 ├── setup.py                            # Package metadata & entry points
-├── tv_matcher/                         # Core matching & OCR engine
+├── tv_matcher/                         # Core matching, media tags & OCR engine
 │   ├── config.py                       # System binary detection & persistent settings
-│   ├── naming.py                       # Plex/Jellyfin naming, sanitization & tag parsing
+│   ├── naming.py                       # Plex/Jellyfin naming, sanitization & tag formatting
+│   ├── media_tags.py                   # Media stream inspection & Sonarr/Radarr release tags
+│   ├── dovi.py                         # Dolby Vision Profile 7 to 8.1 conversion (dovi_convert)
 │   ├── metadata.py                     # TMDB, TVMaze & Local JSON metadata providers
 │   ├── video.py                        # Aspect correction, deinterlacing & frame extraction
 │   ├── ocr.py                          # Multi-pass Tesseract OCR & text normalization
@@ -120,7 +137,9 @@ TVBackupMatcher-GUI/
 ├── server/
 │   └── api_server.py                   # Hardened HTTP API & secure thumbnail server
 ├── tests/
-│   └── test_matcher.py                 # Comprehensive unit & regression test suite
+│   ├── test_matcher.py                 # Core matching, OCR & renamer tests
+│   ├── test_media_tags.py              # Sonarr/Radarr tagging & media inspection tests
+│   └── test_dovi.py                    # Dolby Vision Profile 7 to 8.1 conversion tests
 └── web/                                # Web GUI assets
     ├── index.html                      # Single-page interface
     ├── style.css                       # Modern dark-mode theme

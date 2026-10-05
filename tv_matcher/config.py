@@ -26,6 +26,14 @@ def find_binary(name: str, fallback_paths=None) -> str:
 FFMPEG_BIN = find_binary("ffmpeg")
 FFPROBE_BIN = find_binary("ffprobe")
 TESSERACT_BIN = find_binary("tesseract")
+DOVI_CONVERT_BIN = find_binary("dovi_convert", fallback_paths=[
+    "/opt/homebrew/bin/dovi_convert",
+    "/opt/homebrew/bin/dovi_convert.py",
+    "/usr/local/bin/dovi_convert",
+    "/usr/local/bin/dovi_convert.py",
+    os.path.expanduser("~/.local/bin/dovi_convert"),
+    os.path.expanduser("~/.local/bin/dovi_convert.py"),
+]) or find_binary("dovi_convert.py")
 
 
 def get_system_status():
@@ -33,6 +41,7 @@ def get_system_status():
         "ffmpeg": {"available": bool(FFMPEG_BIN), "path": FFMPEG_BIN},
         "ffprobe": {"available": bool(FFPROBE_BIN), "path": FFPROBE_BIN},
         "tesseract": {"available": bool(TESSERACT_BIN), "path": TESSERACT_BIN},
+        "dovi_convert": {"available": bool(DOVI_CONVERT_BIN), "path": DOVI_CONVERT_BIN},
         "ready": bool(FFMPEG_BIN and FFPROBE_BIN and TESSERACT_BIN)
     }
 
@@ -74,6 +83,16 @@ DEFAULT_SETTINGS: Dict = {
     "use_chapters": True,
     "workers": 3,
     "recent_dirs": [],
+    "sonarr_tags_enabled": True,
+    "sonarr_style": "brackets",     # "brackets" | "hyphen" | "none"
+    "sonarr_source": "auto",        # "auto" | "UHD BluRay Remux" | "BluRay Remux" | "Remux" | "None"
+    "sonarr_include_resolution": True,
+    "sonarr_include_codec": True,
+    "sonarr_include_hdr": True,
+    "sonarr_dv_profile_tag": "full", # "full" (Profile 8.1) | "short" (P8.1) | "none"
+    "sonarr_include_audio": True,
+    "dovi_convert_mode": "standard", # "standard" | "safe"
+    "dovi_auto_convert_p7": False,
 }
 
 MAX_RECENT_DIRS = 6

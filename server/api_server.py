@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Optional
 
 from tv_matcher.config import add_recent_dir, get_system_status, load_settings, save_settings
+from tv_matcher.dovi import get_dovi_status
 from tv_matcher.pipeline import MatchingPipeline
 
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
@@ -68,6 +69,18 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             self.send_json(load_settings())
+            return
+
+        if path == "/api/sonarr/options":
+            self.send_json(self.pipeline.tag_options.to_dict())
+            return
+
+        if path == "/api/dovi/status":
+            self.send_json(get_dovi_status())
+            return
+
+        if path == "/api/dovi/options":
+            self.send_json(self.pipeline.dovi_options.to_dict())
             return
 
         if path == "/api/thumbnail":
@@ -196,6 +209,25 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
 
             elif path == "/api/settings":
                 self.send_json(save_settings(data))
+
+            elif path == "/api/sonarr/options":
+                self.send_json(self.pipeline.set_tag_options(data))
+
+            elif path == "/api/dovi/options":
+                self.send_json(self.pipeline.set_dovi_options(data))
+
+            elif path == "/api/dovi/set_convert":
+                file_path = str(data.get("file_path", "")).strip()
+                convert = bool(data.get("convert", False))
+                self.send_json(self.pipeline.set_file_dovi_convert(file_path, convert))
+
+            elif path == "/api/dovi/set_all":
+                convert = bool(data.get("convert", False))
+                self.send_json(self.pipeline.set_all_dovi_convert(convert))
+
+            elif path == "/api/dovi/auto_convert":
+                auto_convert = bool(data.get("auto_convert", False))
+                self.send_json(self.pipeline.set_dovi_auto_convert(auto_convert))
 
             else:
                 self.send_error(404, "Not Found")

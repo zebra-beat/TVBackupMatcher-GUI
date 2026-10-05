@@ -5,7 +5,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
+from .dovi import DoviOptions, convert_p7_to_p8, get_dovi_status, scan_dovi_file
 from .matcher import is_confident_unique, rank_episodes_for_file, resolve_global_assignments, token_similarity
+from .media_tags import MediaInfo, TagOptions, build_sonarr_tags, probe_media_info
 from .metadata import EpisodeInfo, resolve_show_metadata
 from .naming import build_target_relpath, parse_series_folder
 from .ocr import run_ocr, has_credit_keywords
@@ -58,6 +60,11 @@ class MatchingPipeline:
 
         self.files: List[str] = []
         self.file_info: Dict[str, dict] = {}   # file_path -> {"duration": seconds}
+        self.file_media_info: Dict[str, MediaInfo] = {}  # file_path -> MediaInfo
+        self.file_dovi_convert: Dict[str, bool] = {}     # file_path -> bool
+        self.tag_options = TagOptions()
+        self.dovi_options = DoviOptions()
+        self.dovi_auto_convert_p7: bool = False
         self.all_episodes: List[EpisodeInfo] = []
 
         # file_path -> [(EpisodeInfo, score, timestamp, ocr_text, image_path), ...]
@@ -85,7 +92,17 @@ class MatchingPipeline:
         self.version += 1
 
     def _target_relpath(self, fp: str, ep: EpisodeInfo) -> str:
-        return build_target_relpath(self.series_name, ep, os.path.splitext(fp)[1], self.series_year)
+        media = self.file_media_info.get(fp)
+        dv_conv = self.file_dovi_convert.get(fp, False)
+        return build_target_relpath(
+            self.series_name,
+            ep,
+            os.path.splitext(fp)[1],
+            self.series_year,
+            media_tags=media,
+            tag_options=self.tag_options,
+            dv_converted=dv_conv,
+        )
 
     def _match_flags(self, fp: str, m: dict):
         warning = duration_warning(self.file_info.get(fp, {}).get("duration", 0.0), m["episode"].runtime)
@@ -95,7 +112,10 @@ class MatchingPipeline:
     def get_state(self) -> dict:
         with self._lock:
             items = []
-            counts = {"will_rename": 0, "needs_review": 0, "unmatched": 0, "skipped": 0}
+            counts = {
+                "will_rename": 0, "needs_review": 0, "unmatched": 0, "skipped": 0,
+                "dv_p7_total": 0, "dv_p7_convert": 0,
+            }
             for fp in self.files:
                 m = self.matches.get(fp)
                 active_img = m.get("image_path") if m else ""
@@ -115,6 +135,16 @@ class MatchingPipeline:
                 ]
                 active_idx = next((i for i, f in enumerate(available_frames) if f["is_active"]), 0) if available_frames else -1
 
+                media = self.file_media_info.get(fp)
+                dv_conv = self.file_dovi_convert.get(fp, False)
+                has_dv_p7 = bool(media.has_dv_p7) if media else False
+                if has_dv_p7:
+                    counts["dv_p7_total"] += 1
+                    if dv_conv:
+                        counts["dv_p7_convert"] += 1
+
+                sonarr_tag = build_sonarr_tags(media, self.tag_options, dv_converted=dv_conv) if (media and self.tag_options.enabled) else ""
+
                 base = {
                     "file_path": fp,
                     "file_name": os.path.basename(fp),
@@ -123,6 +153,10 @@ class MatchingPipeline:
                     "available_frames": available_frames,
                     "frame_count": len(available_frames),
                     "active_frame_index": active_idx,
+                    "media_info": media.to_dict() if media else None,
+                    "has_dv_p7": has_dv_p7,
+                    "convert_dv_p7": dv_conv,
+                    "sonarr_tag": sonarr_tag,
                 }
                 if m:
                     ep = m["episode"]
@@ -183,6 +217,10 @@ class MatchingPipeline:
                 "total_files": len(self.files),
                 "total_episodes": len(self.all_episodes),
                 "counts": counts,
+                "tag_options": self.tag_options.to_dict(),
+                "dovi_options": self.dovi_options.to_dict(),
+                "dovi_status": get_dovi_status(),
+                "dovi_auto_convert_p7": self.dovi_auto_convert_p7,
                 "version": self.version,
                 "undo": undo,
                 "matches": items,
@@ -211,6 +249,7 @@ class MatchingPipeline:
             self.state = "scanning"
             self.review_threshold = float(review_threshold)
             self.files, self.file_info, self.file_candidates = [], {}, {}
+            self.file_media_info, self.file_dovi_convert = {}, {}
             self.matches, self.overrides, self.all_episodes = {}, {}, []
             self.metadata_description = ""
             self._bump()
@@ -239,6 +278,7 @@ class MatchingPipeline:
 
     def _analyze_file(self, idx: int, fp: str, params: dict, scan_dir: str):
         info = probe_video(fp)
+        media_info = probe_media_info(fp)
         timestamps = build_candidate_timestamps(info, params["frame_windows"], params["use_chapters"])
         best: Dict[str, tuple] = {}
         candidates: list = []
@@ -284,7 +324,7 @@ class MatchingPipeline:
             candidates = sorted(best.values(), key=lambda c: (-c[1], c[0].code))
             if is_confident_unique(candidates):
                 break  # clear title-card hit: no need to OCR the remaining frames
-        return candidates, info.duration, frames
+        return candidates, info.duration, frames, media_info
 
     def _run_scan_thread(self, series_dir: str, params: dict):
         try:
@@ -331,14 +371,22 @@ class MatchingPipeline:
                 for fut in as_completed(futures):
                     fp = futures[fut]
                     try:
-                        candidates, duration, frames = fut.result()
+                        res = fut.result()
+                        if len(res) == 4:
+                            candidates, duration, frames, media_info = res
+                        else:
+                            candidates, duration, frames = res[:3]
+                            media_info = MediaInfo()
                     except Exception as e:  # one bad file shouldn't abort the whole scan
-                        candidates, duration, frames = [], 0.0, []
+                        candidates, duration, frames, media_info = [], 0.0, [], MediaInfo()
                         self.error_details.append(f"{os.path.basename(fp)}: {e}")
                     file_candidates[fp] = candidates
                     file_frames[fp] = frames
                     with self._lock:
                         self.file_info[fp] = {"duration": duration}
+                        self.file_media_info[fp] = media_info
+                        if self.dovi_auto_convert_p7 and media_info.has_dv_p7:
+                            self.file_dovi_convert[fp] = True
                     done += 1
                     self.progress = 0.08 + 0.88 * (done / total)
                     self.status_message = f"Analysed [{done}/{total}]: {os.path.basename(fp)}"
@@ -588,7 +636,12 @@ class MatchingPipeline:
             }
 
         try:
-            candidates, duration, frames = self._analyze_file(idx, file_path, params, scan_dir)
+            res = self._analyze_file(idx, file_path, params, scan_dir)
+            if len(res) == 4:
+                candidates, duration, frames, media_info = res
+            else:
+                candidates, duration, frames = res[:3]
+                media_info = MediaInfo()
         except Exception as e:
             return {"success": False, "error": f"Analysis failed: {e}"}
 
@@ -596,6 +649,9 @@ class MatchingPipeline:
             self.file_info[file_path] = {"duration": duration}
             self.file_candidates[file_path] = candidates
             self.file_frames[file_path] = frames
+            self.file_media_info[file_path] = media_info
+            if self.dovi_auto_convert_p7 and media_info.has_dv_p7:
+                self.file_dovi_convert[file_path] = True
 
             current_override = self.overrides.get(file_path)
             if current_override and current_override != SKIP:
@@ -664,10 +720,55 @@ class MatchingPipeline:
         self.overrides = remap(self.overrides)
         self.file_info = remap(self.file_info)
         self.file_candidates = remap(self.file_candidates)
+        self.file_frames = remap(self.file_frames)
+        self.file_media_info = remap(self.file_media_info)
+        self.file_dovi_convert = remap(self.file_dovi_convert)
         self._bump()
 
+    def set_tag_options(self, options_dict: dict) -> dict:
+        with self._lock:
+            self.tag_options = TagOptions.from_dict({**self.tag_options.to_dict(), **(options_dict or {})})
+            self._bump()
+            return {"success": True, "tag_options": self.tag_options.to_dict()}
+
+    def set_dovi_options(self, options_dict: dict) -> dict:
+        with self._lock:
+            self.dovi_options = DoviOptions.from_dict({**self.dovi_options.to_dict(), **(options_dict or {})})
+            self._bump()
+            return {"success": True, "dovi_options": self.dovi_options.to_dict()}
+
+    def set_file_dovi_convert(self, file_path: str, convert: bool) -> dict:
+        with self._lock:
+            if file_path not in self.files:
+                return {"success": False, "error": f"Unknown file: {file_path}"}
+            self.file_dovi_convert[file_path] = bool(convert)
+            self._bump()
+            return {"success": True, "file_path": file_path, "convert": bool(convert)}
+
+    def set_all_dovi_convert(self, convert: bool) -> dict:
+        with self._lock:
+            count = 0
+            for fp in self.files:
+                minfo = self.file_media_info.get(fp)
+                if minfo and minfo.has_dv_p7:
+                    self.file_dovi_convert[fp] = bool(convert)
+                    count += 1
+            self._bump()
+            return {"success": True, "count": count, "convert": bool(convert)}
+
+    def set_dovi_auto_convert(self, auto_convert: bool) -> dict:
+        with self._lock:
+            self.dovi_auto_convert_p7 = bool(auto_convert)
+            if self.dovi_auto_convert_p7:
+                for fp in self.files:
+                    minfo = self.file_media_info.get(fp)
+                    if minfo and minfo.has_dv_p7:
+                        self.file_dovi_convert[fp] = True
+            self._bump()
+            return {"success": True, "dovi_auto_convert_p7": self.dovi_auto_convert_p7}
+
     def apply_rename(self, export_cards_dir: str = "", include_unreviewed: bool = False) -> dict:
-        """Safe two-pass rename of confirmed / high-confidence matches (+ optional card export)."""
+        """Safe two-pass rename of confirmed / high-confidence matches (+ optional DV conversion & card export)."""
         with self._lock:
             if self.state in BUSY_STATES:
                 return {"success": False, "error": "A job is currently running."}
@@ -678,24 +779,63 @@ class MatchingPipeline:
                 if self._match_flags(fp, m)[1] and not include_unreviewed:
                     skipped += 1
                     continue
-                target = os.path.join(self.series_dir, *self._target_relpath(fp, m["episode"]).split("/"))
-                planned.append((fp, target, m))
-            previous_state = self.state
-            self.state = "renaming"
-            self.status_message = "Executing safe two-pass file reorganisation..."
-            self.error_message = ""
-            self.error_details = []
+                planned.append((fp, m))
 
-        try:
-            moves = [(fp, target) for fp, target, _ in planned if fp != target]
             if not planned:
                 raise ValueError(f"Nothing to rename: {skipped} match(es) still need review. "
                                  "Confirm or reassign them first.")
 
+            previous_state = self.state
+            self.state = "renaming"
+            self.status_message = "Preparing file reorganization..."
+            self.error_message = ""
+            self.error_details = []
+
+        try:
+            # 1. Execute Dolby Vision Profile 7 -> Profile 8.1 conversions if requested
+            to_convert = [
+                fp for fp, _ in planned
+                if self.file_dovi_convert.get(fp) and self.file_media_info.get(fp, MediaInfo()).has_dv_p7
+            ]
+            if to_convert:
+                dovi_status = get_dovi_status()
+                if not dovi_status["available"] and not self.dovi_options.dry_run:
+                    raise RuntimeError(
+                        f"Cannot convert {len(to_convert)} Dolby Vision Profile 7 file(s): dovi_convert is not installed.\n"
+                        "Please install it via Homebrew: brew tap cryptochrome/dovi_convert && brew install dovi_convert\n"
+                        "Or uncheck 'Convert DV Profile 7' to proceed with renaming only."
+                    )
+
+                for c_idx, fp in enumerate(to_convert, 1):
+                    with self._lock:
+                        self.status_message = (
+                            f"Converting Dolby Vision Profile 7 -> 8.1 [{c_idx}/{len(to_convert)}]: "
+                            f"{os.path.basename(fp)}..."
+                        )
+                        self._bump()
+
+                    convert_p7_to_p8(fp, options=self.dovi_options)
+                    with self._lock:
+                        minfo = self.file_media_info.get(fp)
+                        if minfo:
+                            minfo.dv_profile = 8
+                            minfo.dv_profile_name = "Profile 8.1"
+                            minfo.has_dv_p7 = False
+                            minfo.is_dovi = True
+                            self.file_media_info[fp] = minfo
+                        self.file_dovi_convert[fp] = False
+
+            # 2. Compute final move targets (reflecting any converted Profile 8.1 tags)
+            moves = []
+            for fp, m in planned:
+                target = os.path.join(self.series_dir, *self._target_relpath(fp, m["episode"]).split("/"))
+                if fp != target:
+                    moves.append((fp, target))
+
             exported_count = 0
             if export_cards_dir:
                 cards = {fp: (m["episode"], m["score"], m["timestamp"], m["ocr_text"], m["image_path"])
-                         for fp, _, m in planned}
+                         for fp, m in planned}
                 exported_count = export_title_cards(cards, os.path.abspath(os.path.expanduser(export_cards_dir)),
                                                     self.series_name, self.series_year)
 
@@ -705,6 +845,8 @@ class MatchingPipeline:
                 self._remap_paths(dict(moves))
                 self.state = "completed"
                 self.status_message = f"Renamed {len(moves)} file(s)."
+                if to_convert:
+                    self.status_message += f" (Converted {len(to_convert)} DV Profile 7 file(s) to 8.1)."
                 if len(planned) > len(moves):
                     self.status_message += f" {len(planned) - len(moves)} already correctly named."
                 if skipped:
@@ -712,7 +854,8 @@ class MatchingPipeline:
                 if exported_count:
                     self.status_message += f" Exported {exported_count} title card(s)."
             return {"success": True, "renamed_count": len(moves), "skipped_count": skipped,
-                    "exported_count": exported_count, "manifest": manifest}
+                    "converted_count": len(to_convert), "exported_count": exported_count,
+                    "manifest": manifest}
 
         except Exception as e:
             problems = getattr(e, "problems", [])
