@@ -76,9 +76,9 @@ def main():
 
     print("[*] Compiling standalone executable with PyInstaller...")
     if isinstance(pyinstaller_bin, str) and " " in pyinstaller_bin:
-        cmd = [sys.executable, "-m", "PyInstaller", "--clean", spec_file]
+        cmd = [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm", spec_file]
     else:
-        cmd = [pyinstaller_bin, "--clean", spec_file]
+        cmd = [pyinstaller_bin, "--clean", "--noconfirm", spec_file]
 
     print(f"[+] Command: {' '.join(cmd)}")
     result = subprocess.run(cmd)

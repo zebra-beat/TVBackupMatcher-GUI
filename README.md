@@ -10,7 +10,21 @@ It extracts on-screen title card frames, deinterlaces and cleans the images, run
 
 ## Quick Start
 
-### Option A: Double-Click Launcher (Easiest for macOS)
+### Option A: macOS DMG Drag-and-Drop Installer (Zero Prerequisites!)
+Download the official **`TVBackupMatcher-macOS.dmg`** release from GitHub:
+1. Open `TVBackupMatcher-macOS.dmg`.
+2. Drag **TVBackupMatcher.app** into your **Applications** folder.
+3. Double-click to launch!
+
+> **Note:** The DMG installer is **100% self-contained**! It includes pre-bundled `ffmpeg`, `ffprobe`, `tesseract` (with English models), `dovi_tool`, `dovi_convert`, `mediainfo`, and `mkvmerge`. **No Homebrew or terminal installation is required!**
+
+To build the DMG from source locally:
+```bash
+python3 build_dmg.py
+```
+Outputs `dist/TVBackupMatcher-macOS.dmg` (~60 MB).
+
+### Option B: Double-Click Launcher (Finder)
 In macOS Finder, navigate to the folder and double-click:
 ```
 Launch TVBackupMatcher GUI.command
@@ -19,7 +33,7 @@ You can choose between:
 1. **Native macOS Desktop Window** (Tkinter)
 2. **Modern Web Browser GUI** (Single-page app with live polling)
 
-### Option B: Terminal Command (Zero-Install Python)
+### Option C: Terminal Command (Zero-Install Python)
 ```bash
 # Launch Native Desktop Window
 python3 gui_desktop.py
@@ -28,7 +42,7 @@ python3 gui_desktop.py
 python3 app.py
 ```
 
-### Option C: Standalone Single Executable (macOS & Linux)
+### Option D: Standalone Single Executable (macOS & Linux)
 Pre-packaged single binary with zero Python setup required:
 ```bash
 # Compile standalone binary:
@@ -38,7 +52,7 @@ python3 build_bundle.py --install-deps
 ./dist/tvbackupmatcher
 ```
 
-### Option D: Docker Container (unRAID / TrueNAS / Synology / Linux Server)
+### Option E: Docker Container (unRAID / TrueNAS / Synology / Linux Server)
 Run completely containerized with all dependencies pre-installed (including `ffmpeg`, `tesseract`, and `dovi_convert`):
 ```bash
 docker compose up -d
@@ -242,6 +256,7 @@ TVBackupMatcher-GUI/
 ├── gui_desktop.py                      # Native macOS desktop GUI (Tkinter)
 ├── app.py                              # Web application server launcher
 ├── build_bundle.py                     # Cross-platform PyInstaller executable builder
+├── build_dmg.py                        # Self-contained macOS DMG installer builder
 ├── TVBackupMatcher.spec                # PyInstaller packaging configuration
 ├── Dockerfile                          # Multi-arch container image definition
 ├── docker-compose.yml                  # Compose recipe for server/NAS deployments

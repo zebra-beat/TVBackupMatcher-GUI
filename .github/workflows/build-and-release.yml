@@ -78,6 +78,39 @@ jobs:
           path: ${{ matrix.artifact_name }}
           if-no-files-found: error
 
+  build-macos-dmg:
+    name: Build Self-Contained macOS DMG
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies via Homebrew
+        run: |
+          brew install ffmpeg tesseract mediainfo mkvtoolnix dovi_tool
+
+      - name: Install PyInstaller
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstaller
+
+      - name: Build self-contained DMG with bundled dependencies
+        run: |
+          python3 build_dmg.py
+
+      - name: Upload macOS DMG Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBackupMatcher-macOS.dmg
+          path: dist/TVBackupMatcher-macOS.dmg
+          if-no-files-found: error
+
   build-docker:
     name: Build Docker Container (Multi-Arch)
     needs: test
@@ -103,7 +136,7 @@ jobs:
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-executables, build-docker]
+    needs: [build-executables, build-macos-dmg, build-docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -120,6 +153,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            artifacts/TVBackupMatcher-macOS.dmg/TVBackupMatcher-macOS.dmg
             artifacts/tvbackupmatcher-macos-arm64/tvbackupmatcher-macos-arm64
             artifacts/tvbackupmatcher-macos-x86_64/tvbackupmatcher-macos-x86_64
             artifacts/tvbackupmatcher-linux-x86_64/tvbackupmatcher-linux-x86_64

@@ -6,11 +6,70 @@ import tempfile
 from typing import Dict, List
 
 
+def init_bundled_environment():
+    """Initializes environment variables (PATH, TESSDATA_PREFIX) when running from a bundle or app."""
+    bundled_bin_dirs = []
+    tessdata_dirs = []
+
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    contents_dir = os.path.abspath(os.path.join(exe_dir, ".."))
+
+    bundled_bin_dirs.extend([
+        os.path.join(exe_dir, "bin"),
+        exe_dir,
+        os.path.join(contents_dir, "MacOS", "bin"),
+        os.path.join(contents_dir, "Resources", "bin"),
+    ])
+    tessdata_dirs.extend([
+        os.path.join(contents_dir, "Resources", "tessdata"),
+        os.path.join(contents_dir, "tessdata"),
+        os.path.join(exe_dir, "tessdata"),
+    ])
+
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundled_bin_dirs.append(os.path.join(sys._MEIPASS, "bin"))
+        bundled_bin_dirs.append(sys._MEIPASS)
+        tessdata_dirs.append(os.path.join(sys._MEIPASS, "tessdata"))
+
+    for tdir in tessdata_dirs:
+        if os.path.isdir(tdir) and os.path.isfile(os.path.join(tdir, "eng.traineddata")):
+            os.environ.setdefault("TESSDATA_PREFIX", tdir)
+            break
+
+    existing_path = os.environ.get("PATH", "")
+    for bdir in bundled_bin_dirs:
+        if os.path.isdir(bdir) and bdir not in existing_path:
+            os.environ["PATH"] = f"{bdir}{os.pathsep}{existing_path}"
+
+
+init_bundled_environment()
+
+
 def find_binary(name: str, fallback_paths=None) -> str:
+    # 1. Bundled directories
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    contents_dir = os.path.abspath(os.path.join(exe_dir, ".."))
+    bundle_candidates = [
+        os.path.join(exe_dir, "bin", name),
+        os.path.join(exe_dir, name),
+        os.path.join(contents_dir, "MacOS", "bin", name),
+        os.path.join(contents_dir, "Resources", "bin", name),
+    ]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundle_candidates.extend([
+            os.path.join(sys._MEIPASS, "bin", name),
+            os.path.join(sys._MEIPASS, name),
+        ])
+    for cand in bundle_candidates:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+
+    # 2. PATH resolution (including prepended bundle bin paths)
     path = shutil.which(name)
     if path:
         return path
 
+    # 3. Fallbacks
     fallbacks = fallback_paths or [
         f"/opt/homebrew/bin/{name}",
         f"/usr/local/bin/{name}",
@@ -38,6 +97,16 @@ DOVI_CONVERT_BIN = find_binary("dovi_convert", fallback_paths=[
 
 
 def get_system_status():
+    global FFMPEG_BIN, FFPROBE_BIN, TESSERACT_BIN, DOVI_CONVERT_BIN
+    if not FFMPEG_BIN:
+        FFMPEG_BIN = find_binary("ffmpeg")
+    if not FFPROBE_BIN:
+        FFPROBE_BIN = find_binary("ffprobe")
+    if not TESSERACT_BIN:
+        TESSERACT_BIN = find_binary("tesseract")
+    if not DOVI_CONVERT_BIN:
+        DOVI_CONVERT_BIN = find_binary("dovi_convert") or find_binary("dovi_convert.py")
+
     return {
         "ffmpeg": {"available": bool(FFMPEG_BIN), "path": FFMPEG_BIN},
         "ffprobe": {"available": bool(FFPROBE_BIN), "path": FFPROBE_BIN},

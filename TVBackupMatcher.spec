@@ -68,3 +68,22 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        exe,
+        name='TVBackupMatcher.app',
+        icon=None,
+        bundle_identifier='com.tvbackupmatcher.gui',
+        info_plist={
+            'CFBundleName': 'TVBackupMatcher',
+            'CFBundleDisplayName': 'TVBackupMatcher GUI',
+            'CFBundleIdentifier': 'com.tvbackupmatcher.gui',
+            'CFBundleVersion': '2.1.0',
+            'CFBundleShortVersionString': '2.1.0',
+            'CFBundlePackageType': 'APPL',
+            'NSHighResolutionCapable': True,
+            'LSMinimumSystemVersion': '11.0',
+        }
+    )
+
