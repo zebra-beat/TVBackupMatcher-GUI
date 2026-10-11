@@ -3,7 +3,7 @@ import json
 import mimetypes
 import os
 import urllib.parse
-from typing import Optional
+from typing import Optional, Union
 
 from tv_matcher.config import add_recent_dir, get_system_status, load_settings, save_settings
 from tv_matcher.dovi import get_dovi_status
@@ -21,6 +21,7 @@ def _is_within(path: str, root: str) -> bool:
 class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
     pipeline: MatchingPipeline = None
     web_dir: str = ""
+    allow_external: bool = False
 
     def log_message(self, format, *args):
         # Silence default access logs to keep terminal output clean
@@ -30,10 +31,16 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _allowed_origins(self):
         port = self.server.server_address[1]
-        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origins = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        host_header = self.headers.get("Host", "")
+        if self.allow_external and host_header:
+            origins.add(host_header)
+        return origins
 
     def _check_host(self) -> bool:
-        """Blocks DNS-rebinding: only accept requests addressed to our own loopback host."""
+        """Blocks DNS-rebinding: only accepts loopback host unless external access is enabled."""
+        if self.allow_external:
+            return True
         if self.headers.get("Host", "") not in self._allowed_origins():
             self.send_error(403, "Forbidden host")
             return False
@@ -42,9 +49,16 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
     def _check_post_origin(self) -> bool:
         """Blocks CSRF: other websites can't send JSON (needs CORS preflight) or spoof Origin."""
         origin = self.headers.get("Origin")
-        if origin is not None and urllib.parse.urlparse(origin).netloc not in self._allowed_origins():
-            self.send_json({"success": False, "error": "Cross-origin request rejected."}, status=403)
-            return False
+        if origin is not None:
+            netloc = urllib.parse.urlparse(origin).netloc
+            if self.allow_external:
+                host_header = self.headers.get("Host", "")
+                if netloc != host_header and netloc not in self._allowed_origins():
+                    self.send_json({"success": False, "error": "Cross-origin request rejected."}, status=403)
+                    return False
+            elif netloc not in self._allowed_origins():
+                self.send_json({"success": False, "error": "Cross-origin request rejected."}, status=403)
+                return False
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if ctype != "application/json":
             self.send_json({"success": False, "error": "Content-Type must be application/json."}, status=415)
@@ -264,10 +278,34 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def run_server(port: int = 8765, web_dir: str = "", pipeline: Optional[MatchingPipeline] = None):
+def run_server(
+    host_or_port: Union[str, int] = "127.0.0.1",
+    port: int = 8765,
+    web_dir: str = "",
+    pipeline: Optional[MatchingPipeline] = None,
+    host: Optional[str] = None,
+    allow_external: Optional[bool] = None,
+    **kwargs
+):
+    # Support backward-compatibility if port was passed as first positional arg: run_server(8765, web_dir, pipeline)
+    if isinstance(host_or_port, int):
+        actual_port = host_or_port
+        actual_host = host or kwargs.get("host") or os.environ.get("TVMATCHER_HOST", os.environ.get("HOST", "127.0.0.1"))
+    else:
+        actual_host = host or host_or_port or os.environ.get("TVMATCHER_HOST", os.environ.get("HOST", "127.0.0.1"))
+        actual_port = port
+
     GUIRequestHandler.pipeline = pipeline or MatchingPipeline()
     GUIRequestHandler.web_dir = web_dir
-    server_address = ("127.0.0.1", port)
+
+    if allow_external is None:
+        allow_external = (
+            actual_host not in ("127.0.0.1", "localhost")
+            or os.environ.get("TVMATCHER_ALLOW_EXTERNAL", "").lower() in ("1", "true", "yes")
+        )
+    GUIRequestHandler.allow_external = bool(allow_external)
+
+    server_address = (actual_host, actual_port)
     # Threaded so state polling keeps working while a rename or undo request is running.
     httpd = http.server.ThreadingHTTPServer(server_address, GUIRequestHandler)
     httpd.daemon_threads = True

@@ -1,0 +1,126 @@
+name: Build, Test & Package
+
+on:
+  push:
+    branches: [main, feat/*]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
+
+      - name: Run test suite
+        run: |
+          python3 -m unittest discover -s tests -t . -v
+
+  build-executables:
+    name: Build Standalone Binary (${{ matrix.os }} - ${{ matrix.arch }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            artifact_name: tvbackupmatcher-macos-arm64
+          - os: macos-13
+            arch: x86_64
+            artifact_name: tvbackupmatcher-macos-x86_64
+          - os: ubuntu-22.04
+            arch: x86_64
+            artifact_name: tvbackupmatcher-linux-x86_64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstaller
+
+      - name: Build standalone executable
+        run: |
+          python3 build_bundle.py
+
+      - name: Prepare binary artifact
+        run: |
+          chmod +x dist/tvbackupmatcher
+          cp dist/tvbackupmatcher ${{ matrix.artifact_name }}
+
+      - name: Upload standalone executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+          if-no-files-found: error
+
+  build-docker:
+    name: Build Docker Container (Multi-Arch)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and test Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: tvbackupmatcher:latest
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-executables, build-docker]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/tvbackupmatcher-macos-arm64/tvbackupmatcher-macos-arm64
+            artifacts/tvbackupmatcher-macos-x86_64/tvbackupmatcher-macos-x86_64
+            artifacts/tvbackupmatcher-linux-x86_64/tvbackupmatcher-linux-x86_64
+          generate_release_notes: true

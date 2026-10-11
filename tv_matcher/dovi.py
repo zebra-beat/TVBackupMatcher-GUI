@@ -13,13 +13,17 @@ from typing import Callable, Dict, List, Optional
 from .config import find_binary
 
 DOVI_CONVERT_FALLBACKS = [
-    "/opt/homebrew/bin/dovi_convert",
-    "/opt/homebrew/bin/dovi_convert.py",
+    os.environ.get("DOVI_CONVERT_BIN", ""),
     "/usr/local/bin/dovi_convert",
     "/usr/local/bin/dovi_convert.py",
+    "/usr/bin/dovi_convert",
+    "/usr/bin/dovi_convert.py",
+    "/opt/homebrew/bin/dovi_convert",
+    "/opt/homebrew/bin/dovi_convert.py",
     os.path.expanduser("~/.local/bin/dovi_convert"),
     os.path.expanduser("~/.local/bin/dovi_convert.py"),
 ]
+DOVI_CONVERT_FALLBACKS = [p for p in DOVI_CONVERT_FALLBACKS if p]
 
 DOVI_CONVERT_BIN = find_binary("dovi_convert", fallback_paths=DOVI_CONVERT_FALLBACKS) or find_binary("dovi_convert.py", fallback_paths=DOVI_CONVERT_FALLBACKS)
 

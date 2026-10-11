@@ -1,0 +1,27 @@
+services:
+  tvbackupmatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tvbackupmatcher:latest
+    container_name: tvbackupmatcher
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=UTC
+      - HOST=0.0.0.0
+      - PORT=8765
+      - NO_BROWSER=1
+    volumes:
+      # Media library directory (where TV disc backups reside)
+      - ./media:/media
+      # Persistent settings, history, and undo rename logs
+      - ./config:/config
+      # Optional: Exported title card galleries
+      - ./export:/export
+      # Optional: Scratch cache directory
+      - ./cache:/cache

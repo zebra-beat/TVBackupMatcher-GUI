@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import sys
 import tempfile
 from typing import Dict, List
 
@@ -57,11 +58,24 @@ def verify_environment() -> List[str]:
 # ---------------------------------------------------------------------------
 
 def app_support_dir() -> str:
-    """Per-user data directory. Override with TVMATCHER_HOME (used by tests)."""
+    """Per-user data directory. Override with TVMATCHER_HOME (used by tests and containers)."""
     override = os.environ.get("TVMATCHER_HOME")
     if override:
         return override
-    return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "TVBackupMatcher")
+
+    # Container environment support: if /config exists and is writable
+    if os.path.isdir("/config") and os.access("/config", os.W_OK):
+        return "/config"
+
+    if sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "TVBackupMatcher")
+    elif sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", os.path.expanduser("~"))
+        return os.path.join(appdata, "TVBackupMatcher")
+    else:
+        # Linux / Unix XDG Base Directory Specification
+        xdg_config = os.environ.get("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config"))
+        return os.path.join(xdg_config, "tvbackupmatcher")
 
 
 def rename_log_dir() -> str:

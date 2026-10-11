@@ -1,0 +1,17 @@
+.git
+.github
+tests
+build
+dist
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.venv
+venv
+*.egg-info
+*.log
+scratch
+*.spec
+Launch TVBackupMatcher GUI.command
