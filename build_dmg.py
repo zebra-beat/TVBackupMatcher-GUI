@@ -156,14 +156,22 @@ def bundle_macos_app():
                     all_dylibs[real_dep] = fname
                     if real_dep not in visited:
                         to_scan.append(real_dep)
+                if dep not in all_dylibs:
+                    all_dylibs[dep] = fname
 
     log(f"Discovered {len(all_dylibs)} external dylibs to bundle into Frameworks/")
 
-    # Copy all dylibs to Frameworks/
+    # Copy all unique dylibs to Frameworks/
+    copied_dst = set()
     for src_path, fname in all_dylibs.items():
-        dst_path = os.path.join(FRAMEWORKS_DIR, fname)
-        shutil.copy2(src_path, dst_path)
-        os.chmod(dst_path, 0o755)
+        if fname in copied_dst:
+            continue
+        real_src = os.path.realpath(src_path)
+        if os.path.isfile(real_src):
+            dst_path = os.path.join(FRAMEWORKS_DIR, fname)
+            shutil.copy2(real_src, dst_path)
+            os.chmod(dst_path, 0o755)
+            copied_dst.add(fname)
 
     # 6. Relink Mach-O dependencies using install_name_tool
     log("Relinking Mach-O load paths for bundled dylibs and binaries...")
@@ -177,10 +185,6 @@ def bundle_macos_app():
         # Update references to other dylibs
         for src_path, dep_fname in all_dylibs.items():
             subprocess.run(["install_name_tool", "-change", src_path, f"@loader_path/{dep_fname}", dylib_path], check=False)
-            # Also handle symlink source name
-            sym_name = os.path.basename(src_path)
-            if sym_name != dep_fname:
-                subprocess.run(["install_name_tool", "-change", src_path, f"@loader_path/{dep_fname}", dylib_path], check=False)
 
     # Second: binaries inside MacOS/bin/
     for bin_path in copied_binaries:

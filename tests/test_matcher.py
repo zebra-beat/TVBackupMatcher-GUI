@@ -95,6 +95,14 @@ class TestTVBackupMatcher(unittest.TestCase):
         fear_exact = token_similarity("Fear", "A Tale of Fear and Trembling")
         self.assertGreaterEqual(fear_exact, 0.9)
 
+    def test_stylized_kerning_and_condensed_matching(self):
+        # Stylized title cards with wide kerning or broken tokens (e.g. Batman TAS)
+        batman_s01e01 = token_similarity("On Leather Wings", "oN ER iE Wl NG")
+        self.assertGreater(batman_s01e01, 0.5)
+
+        batman_spaced = token_similarity("On Leather Wings", "O N  L E A T H E R  W I N G S")
+        self.assertGreater(batman_spaced, 0.9)
+
     def test_naming_and_folder_parsing(self):
         # 1. Jellyfin style tag
         info1 = parse_series_folder("Superman The Animated Series (1996) [tmdbid-4303]")
@@ -370,6 +378,52 @@ class TestTVBackupMatcher(unittest.TestCase):
 
         # Ensure fileB remains untouched
         self.assertEqual(pipeline.matches[fileB]["episode"].code, "S01E02")
+
+    def test_pipeline_fallback_frame_preview_for_unmatched(self):
+        pipeline = MatchingPipeline(temp_dir=os.path.join(self.test_dir, "tmp"))
+        fileA = os.path.join(self.test_dir, "disc_t01.mkv")
+        with open(fileA, "w") as f: f.write("video")
+        pipeline.files = [fileA]
+
+        fallback_img = os.path.join(self.test_dir, "fallback.jpg")
+        with open(fallback_img, "w") as f: f.write("thumb")
+
+        pipeline.file_frames[fileA] = [{
+            "timestamp": 64.0,
+            "image_path": fallback_img,
+            "ocr_text": "",
+            "score": 0.0,
+            "has_credits": False,
+            "episode_code": ""
+        }]
+
+        state = pipeline.get_state()
+        item = state["matches"][0]
+        self.assertEqual(item["status"], "unmatched")
+        self.assertEqual(item["frame_count"], 1)
+        self.assertTrue(item["has_thumbnail"])
+        self.assertEqual(item["image_path"], fallback_img)
+        self.assertEqual(item["timestamp"], 64.0)
+
+    def test_find_binary_broken_bundle_fallback(self):
+        from tv_matcher.config import find_binary
+        # When given fallback paths where the first path is broken/unexecutable
+        broken = os.path.join(self.test_dir, "broken_bin")
+        working = os.path.join(self.test_dir, "working_bin")
+
+        # broken file exits with code 1
+        with open(broken, "w") as f:
+            f.write("#!/bin/sh\nexit 1\n")
+        os.chmod(broken, 0o755)
+
+        # working file exits with code 0 on --version
+        with open(working, "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(working, 0o755)
+
+        found = find_binary("custom_tool", fallback_paths=[broken, working])
+        self.assertEqual(found, working)
+
 
 if __name__ == "__main__":
     unittest.main()

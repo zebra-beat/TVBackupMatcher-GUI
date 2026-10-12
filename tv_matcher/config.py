@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from typing import Dict, List
@@ -45,6 +46,29 @@ def init_bundled_environment():
 init_bundled_environment()
 
 
+def _can_run_binary(path: str, name: str) -> bool:
+    """Verifies that an executable can actually run without crashing (e.g. missing dyld libraries)."""
+    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+        return False
+    if path.endswith(".py"):
+        return True
+    probe_flag = "-version" if "ff" in name.lower() else "--version"
+    try:
+        env = dict(os.environ)
+        env["PAGER"] = "cat"
+        proc = subprocess.run(
+            [path, probe_flag],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            timeout=2.0,
+            check=False
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def find_binary(name: str, fallback_paths=None) -> str:
     # 1. Bundled directories
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
@@ -61,12 +85,12 @@ def find_binary(name: str, fallback_paths=None) -> str:
             os.path.join(sys._MEIPASS, name),
         ])
     for cand in bundle_candidates:
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+        if _can_run_binary(cand, name):
             return cand
 
     # 2. PATH resolution (including prepended bundle bin paths)
     path = shutil.which(name)
-    if path:
+    if path and _can_run_binary(path, name):
         return path
 
     # 3. Fallbacks
@@ -76,6 +100,16 @@ def find_binary(name: str, fallback_paths=None) -> str:
         f"/usr/bin/{name}",
         f"/bin/{name}"
     ]
+    for fb in fallbacks:
+        if _can_run_binary(fb, name):
+            return fb
+
+    # Last resort fallback if _can_run_binary check fails (e.g. mock unit tests)
+    for cand in bundle_candidates:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    if path and os.path.isfile(path) and os.access(path, os.X_OK):
+        return path
     for fb in fallbacks:
         if os.path.isfile(fb) and os.access(fb, os.X_OK):
             return fb

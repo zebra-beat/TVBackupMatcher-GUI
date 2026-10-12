@@ -12,7 +12,8 @@ _TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 
 
 def _tesseract(image_path: str, psm: str) -> str:
-    cmd = [TESSERACT_BIN, image_path, "stdout", "--psm", psm]
+    real_path = os.path.realpath(image_path)
+    cmd = [TESSERACT_BIN, real_path, "stdout", "--psm", psm]
     try:
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               env=_TESSERACT_ENV, timeout=60)
@@ -27,14 +28,15 @@ def run_ocr(image_path: str, variants: Optional[Iterable[str]] = None) -> str:
     read with sparse-text mode (--psm 11, best for title cards). Without variants, falls back
     to the original behaviour of two page-segmentation modes on the single image.
     """
-    if not os.path.exists(image_path):
+    real_image_path = os.path.realpath(image_path)
+    if not os.path.exists(real_image_path):
         return ""
 
-    images = [p for p in (variants or []) if p and os.path.exists(p)]
+    images = [os.path.realpath(p) for p in (variants or []) if p and os.path.exists(p)]
     if images:
         jobs = [(p, "11") for p in images]
     else:
-        jobs = [(image_path, "11"), (image_path, "3")]
+        jobs = [(real_image_path, "11"), (real_image_path, "3")]
 
     combined_text = [txt for txt in (_tesseract(p, psm) for p, psm in jobs) if txt]
     raw = " ".join(combined_text)

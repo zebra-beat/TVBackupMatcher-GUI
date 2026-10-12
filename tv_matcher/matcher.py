@@ -50,6 +50,33 @@ def _best_fuzzy_ratio(token: str, fuzzy_words: Tuple[str, ...]) -> float:
     return best
 
 
+@lru_cache(maxsize=16384)
+def _condensed_match(c_title: str, norm_text: str) -> float:
+    """Handles split kerning and stylized fonts where OCR fragments words into 1-2 letter chunks."""
+    if len(c_title) < 5:
+        return 0.0
+    words = norm_text.split()
+    if not words:
+        return 0.0
+    c_text = "".join(words)
+    if c_title == c_text:
+        return PHRASE_SCORE
+    best_ratio = 0.0
+    for i in range(len(words)):
+        chunk = ""
+        for j in range(i, len(words)):
+            chunk += words[j]
+            if len(chunk) > len(c_title) + 5:
+                break
+            if abs(len(chunk) - len(c_title)) <= 4:
+                r = SequenceMatcher(None, c_title, chunk).ratio()
+                if r > best_ratio:
+                    best_ratio = r
+    if best_ratio >= 0.55:
+        return best_ratio * FUZZY_CREDIT
+    return 0.0
+
+
 def token_similarity(title: str, text: str) -> float:
     norm_title = normalize_for_matching(title)
     if not norm_title or not text:
@@ -71,6 +98,12 @@ def token_similarity(title: str, text: str) -> float:
                 if ratio >= FUZZY_MIN_RATIO:
                     matched += ratio * FUZZY_CREDIT
         score = matched / max(len(title_tokens), 1)
+
+    if score < 0.6:
+        c_title = norm_title.replace(" ", "")
+        condensed_score = _condensed_match(c_title, norm_text)
+        if condensed_score > score:
+            score = condensed_score
 
     title_parts = set(_PART_RE.findall(norm_title))
     if title_parts:

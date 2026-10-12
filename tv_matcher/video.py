@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import subprocess
@@ -6,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from .config import FFMPEG_BIN, FFPROBE_BIN
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_FRAME_WINDOWS = "64-75"
 CHAPTER_OFFSETS = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0)
@@ -163,15 +166,29 @@ def extract_frame(video_path: str, timestamp: float, output_path: str,
         "-map", "[luma]", "-frames:v", "1", "-f", "rawvideo", "pipe:1",
     ]
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60, check=True)
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=True)
         luma = proc.stdout
         if not luma or not all(os.path.exists(p) for p in outputs):
             raise RuntimeError("ffmpeg produced no frame")
         if max(luma) - min(luma) < BLANK_FRAME_RANGE:
             raise RuntimeError("blank frame")
         return True
-    except Exception:
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode("utf-8", errors="ignore").strip() if e.stderr else str(e)
+        logger.warning("ffmpeg extraction failed at %.2fs: %s", timestamp, err)
         for p in outputs:
             if os.path.exists(p):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        return False
+    except Exception as e:
+        logger.debug("Frame extraction skipped at %.2fs: %s", timestamp, e)
+        for p in outputs:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
         return False

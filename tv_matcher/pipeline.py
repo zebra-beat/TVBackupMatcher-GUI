@@ -187,10 +187,12 @@ class MatchingPipeline:
                 else:
                     skipped = self.overrides.get(fp) == SKIP
                     counts["skipped" if skipped else "unmatched"] += 1
+                    fallback_img = available_frames[0]["image_path"] if available_frames else ""
+                    fallback_t = available_frames[0]["timestamp"] if available_frames else 0.0
                     items.append({**base,
                         "episode_code": "", "episode_title": "Skipped" if skipped else "Unmatched",
-                        "season": 0, "episode_num": 0, "score": 0.0, "timestamp": 0.0,
-                        "ocr_sample": "", "has_thumbnail": False, "image_path": "",
+                        "season": 0, "episode_num": 0, "score": 0.0, "timestamp": fallback_t,
+                        "ocr_sample": "", "has_thumbnail": bool(fallback_img and os.path.exists(fallback_img)), "image_path": fallback_img,
                         "is_overridden": skipped, "confirmed": False, "needs_review": False,
                         "has_credits": False, "warning": "", "target_relpath": "", "already_named": False,
                         "status": "skipped" if skipped else "unmatched",
@@ -281,8 +283,8 @@ class MatchingPipeline:
         media_info = probe_media_info(fp)
         timestamps = build_candidate_timestamps(info, params["frame_windows"], params["use_chapters"])
         best: Dict[str, tuple] = {}
-        candidates: list = []
         frames: list = []
+        fallback_frame = None
         for t in timestamps:
             if self._cancel.is_set():
                 break
@@ -299,10 +301,20 @@ class MatchingPipeline:
                     except Exception:
                         pass
             if not ocr_txt:
-                try:
-                    os.remove(img_path)
-                except Exception:
-                    pass
+                if fallback_frame is None:
+                    fallback_frame = {
+                        "timestamp": round(t, 2),
+                        "image_path": img_path,
+                        "ocr_text": "",
+                        "score": 0.0,
+                        "has_credits": False,
+                        "episode_code": "",
+                    }
+                else:
+                    try:
+                        os.remove(img_path)
+                    except Exception:
+                        pass
                 continue
 
             frame_cands = rank_episodes_for_file([(t, ocr_txt, img_path)], self.all_episodes, params["min_score"])
@@ -324,6 +336,15 @@ class MatchingPipeline:
             candidates = sorted(best.values(), key=lambda c: (-c[1], c[0].code))
             if is_confident_unique(candidates):
                 break  # clear title-card hit: no need to OCR the remaining frames
+
+        if not frames and fallback_frame:
+            frames.append(fallback_frame)
+        elif frames and fallback_frame:
+            try:
+                os.remove(fallback_frame["image_path"])
+            except Exception:
+                pass
+
         return candidates, info.duration, frames, media_info
 
     def _run_scan_thread(self, series_dir: str, params: dict):
@@ -447,15 +468,18 @@ class MatchingPipeline:
                 del self.matches[displaced]
                 self.overrides.pop(displaced, None)
 
-            # Prefer the frame that matched this episode; otherwise keep the file's current frame.
+            # Prefer the frame that matched this episode; otherwise keep the file's current frame or fallback frame.
             frame = next((c for c in self.file_candidates.get(file_path, []) if c[0].code == episode_code), None)
             current = self.matches.get(file_path, {})
+            current_frames = self.file_frames.get(file_path, [])
+            default_img = current_frames[0].get("image_path", "") if current_frames else ""
+            default_t = current_frames[0].get("timestamp", 0.0) if current_frames else 0.0
             self.matches[file_path] = {
                 "episode": target_ep,
                 "score": 1.0,
-                "timestamp": frame[2] if frame else current.get("timestamp", 0.0),
+                "timestamp": frame[2] if frame else current.get("timestamp", default_t),
                 "ocr_text": frame[3] if frame else current.get("ocr_text", "[Manually Assigned by User]"),
-                "image_path": frame[4] if frame else current.get("image_path", ""),
+                "image_path": frame[4] if frame else current.get("image_path", default_img),
                 "confirmed": True,
                 "manual": True,
             }
