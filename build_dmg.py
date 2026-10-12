@@ -80,9 +80,10 @@ def bundle_macos_app():
 
     # 1. Build PyInstaller .app bundle
     log("Building TVBackupMatcher.app with PyInstaller...")
-    pyinstaller_cmd = ["pyinstaller", "--clean", "--noconfirm", "TVBackupMatcher.spec"]
-    if not shutil.which("pyinstaller"):
-        pyinstaller_cmd = ["uv", "run", "--with", "pyinstaller", "pyinstaller", "--clean", "--noconfirm", "TVBackupMatcher.spec"]
+    if shutil.which("pyinstaller"):
+        pyinstaller_cmd = ["pyinstaller", "--clean", "--noconfirm", "TVBackupMatcher.spec"]
+    else:
+        pyinstaller_cmd = [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm", "TVBackupMatcher.spec"]
     
     subprocess.check_call(pyinstaller_cmd, cwd=REPO_ROOT)
     if not os.path.isdir(APP_PATH):
@@ -272,6 +273,12 @@ def bundle_macos_app():
             log_warn(f"hdiutil create failed: {e}")
 
     # Clean up staging directory
+    app_link = os.path.join(staging_dir, "Applications")
+    if os.path.islink(app_link):
+        try:
+            os.unlink(app_link)
+        except OSError:
+            pass
     shutil.rmtree(staging_dir, ignore_errors=True)
 
     if dmg_created and os.path.isfile(DMG_PATH):

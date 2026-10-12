@@ -2,15 +2,26 @@ name: Build, Test & Package
 
 on:
   push:
-    branches: [main, feat/*]
-    tags: ['v*']
+    branches:
+      - main
+      - 'feat/**'
+      - 'feature/**'
+    tags:
+      - 'v*'
   pull_request:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish GitHub release for current commit'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   test:
-    name: Run Unit Tests
+    name: Run Unit Tests & Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -25,6 +36,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-eng
+
+      - name: Verify Python compilation
+        run: |
+          python3 -m py_compile app.py gui_desktop.py build_bundle.py build_dmg.py server/*.py tv_matcher/*.py tests/*.py
+
+      - name: Verify JavaScript syntax
+        run: |
+          node --check web/app.js
 
       - name: Run test suite
         run: |
@@ -41,7 +60,7 @@ jobs:
           - os: macos-latest
             arch: arm64
             artifact_name: tvbackupmatcher-macos-arm64
-          - os: macos-13
+          - os: macos-15-intel
             arch: x86_64
             artifact_name: tvbackupmatcher-macos-x86_64
           - os: ubuntu-22.04
@@ -79,7 +98,7 @@ jobs:
           if-no-files-found: error
 
   build-macos-dmg:
-    name: Build Self-Contained macOS DMG
+    name: Build Self-Contained macOS DMG & App
     needs: test
     runs-on: macos-latest
     steps:
@@ -94,6 +113,9 @@ jobs:
       - name: Install system dependencies via Homebrew
         run: |
           brew install ffmpeg tesseract mediainfo mkvtoolnix dovi_tool
+          # Download dovi_convert so it is bundled directly into the macOS app
+          curl -sSL https://raw.githubusercontent.com/cryptochrome/dovi_convert/master/dovi_convert.py -o "$(brew --prefix)/bin/dovi_convert"
+          chmod +x "$(brew --prefix)/bin/dovi_convert"
 
       - name: Install PyInstaller
         run: |
@@ -103,12 +125,21 @@ jobs:
       - name: Build self-contained DMG with bundled dependencies
         run: |
           python3 build_dmg.py
+          # Package the .app bundle as a zip archive preserving symlinks and signatures
+          ditto -c -k --sequesterRsrc --keepParent dist/TVBackupMatcher.app dist/TVBackupMatcher-macOS-app.zip
 
       - name: Upload macOS DMG Installer
         uses: actions/upload-artifact@v4
         with:
           name: TVBackupMatcher-macOS.dmg
           path: dist/TVBackupMatcher-macOS.dmg
+          if-no-files-found: error
+
+      - name: Upload macOS App Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBackupMatcher-macOS-app.zip
+          path: dist/TVBackupMatcher-macOS-app.zip
           if-no-files-found: error
 
   build-docker:
@@ -126,7 +157,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and test Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -135,7 +166,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
     needs: [build-executables, build-macos-dmg, build-docker]
     runs-on: ubuntu-latest
     permissions:
@@ -147,14 +178,18 @@ jobs:
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release-assets
+          sha256sum TVBackupMatcher* tvbackupmatcher* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/TVBackupMatcher-macOS.dmg/TVBackupMatcher-macOS.dmg
-            artifacts/tvbackupmatcher-macos-arm64/tvbackupmatcher-macos-arm64
-            artifacts/tvbackupmatcher-macos-x86_64/tvbackupmatcher-macos-x86_64
-            artifacts/tvbackupmatcher-linux-x86_64/tvbackupmatcher-linux-x86_64
+            release-assets/*
           generate_release_notes: true
