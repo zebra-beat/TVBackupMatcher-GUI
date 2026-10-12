@@ -126,7 +126,7 @@ def bundle_macos_app():
             log(f"Bundling Tesseract language data from {src_dir}...")
             shutil.copy2(eng_file, os.path.join(TESSDATA_DIR, "eng.traineddata"))
             osd_file = os.path.join(src_dir, "osd.traineddata")
-            if os.path.isfile(os.d_file if hasattr(os, "d_file") else osd_file):
+            if os.path.isfile(osd_file):
                 shutil.copy2(osd_file, os.path.join(TESSDATA_DIR, "osd.traineddata"))
             tessdata_found = True
             log_success("Bundled eng.traineddata.")

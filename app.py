@@ -16,8 +16,7 @@ else:
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from tv_matcher.config import get_system_status, verify_environment
-from tv_matcher.dovi import get_dovi_status
+from tv_matcher.config import get_system_status
 from tv_matcher.pipeline import MatchingPipeline
 from server.api_server import run_server
 

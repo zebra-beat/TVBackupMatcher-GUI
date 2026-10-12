@@ -239,7 +239,7 @@ function renderRecentChips(dirs) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "chip";
-    const parts = path.split("/").filter(Boolean);
+    const parts = path.split(/[/\\]/).filter(Boolean);
     btn.textContent = parts[parts.length - 1] || path;
     btn.title = path;
     btn.onclick = () => setDir(path);

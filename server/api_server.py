@@ -148,18 +148,31 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
                 if not series_dir:
                     self.send_json({"success": False, "error": "Series folder is required."}, status=400)
                     return
+                try:
+                    min_score = float(data.get("min_score", 0.35))
+                except (ValueError, TypeError):
+                    min_score = 0.35
+                try:
+                    workers = max(1, int(data.get("workers", 3)))
+                except (ValueError, TypeError):
+                    workers = 3
+                try:
+                    review_threshold = float(data.get("review_threshold", 0.6))
+                except (ValueError, TypeError):
+                    review_threshold = 0.6
+
                 self.pipeline.start_scan(
                     series_dir,
                     series_name=str(data.get("series_name", "")).strip(),
                     tvdb_id=str(data.get("tvdb_id", "")).strip(),
                     episodes_file=str(data.get("episodes_file", "")).strip(),
-                    min_score=float(data.get("min_score", 0.35)),
+                    min_score=min_score,
                     metadata_source=str(data.get("metadata_source", "auto")),
                     tmdb_api_key=str(data.get("tmdb_api_key", "")).strip(),
                     frame_windows=str(data.get("frame_windows", "64-75")),
                     use_chapters=bool(data.get("use_chapters", True)),
-                    workers=int(data.get("workers", 3)),
-                    review_threshold=float(data.get("review_threshold", 0.6)),
+                    workers=workers,
+                    review_threshold=review_threshold,
                 )
                 add_recent_dir(series_dir)
                 self.send_json({"success": True, "message": "Scan started."})

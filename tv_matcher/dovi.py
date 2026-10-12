@@ -5,10 +5,9 @@ for universal playback compatibility on Apple TV (Infuse, Plex, Jellyfin) and ot
 """
 import os
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Optional
 
 from .config import find_binary
 
@@ -213,8 +212,10 @@ def convert_p7_to_p8(
             "dry_run": False,
             "message": "Successfully converted to Dolby Vision Profile 8.1"
         }
+    except (RuntimeError, TimeoutError, FileNotFoundError):
+        raise
     except subprocess.TimeoutExpired:
         proc.kill()
         raise TimeoutError("dovi_convert process timed out after 2 hours.")
     except Exception as e:
-        raise RuntimeError(f"dovi_convert conversion error: {e}")
+        raise RuntimeError(f"dovi_convert conversion error: {e}") from e

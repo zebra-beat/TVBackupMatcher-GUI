@@ -121,6 +121,13 @@ class TestTVBackupMatcher(unittest.TestCase):
         clean = sanitize_filename("Batman/Superman: World's Finest?*<>|")
         self.assertEqual(clean, "Batman - Superman - World's Finest")
 
+        # 6. Target relpath and path normalization
+        from tv_matcher.naming import build_target_relpath
+        rel = build_target_relpath("Show", ep, ".mkv", year=2020)
+        self.assertEqual(rel, "Season 01/Show (2020) - S01E01 - The Last Son of Krypton.mkv")
+        full = os.path.normpath(os.path.join("/media/series", rel))
+        self.assertTrue(full.endswith(os.path.normpath("Season 01/Show (2020) - S01E01 - The Last Son of Krypton.mkv")))
+
     def test_global_resolution(self):
         ep1 = EpisodeInfo(season=1, episode=1, title="Episode One", code="S01E01")
         ep2 = EpisodeInfo(season=1, episode=2, title="Episode Two", code="S01E02")
@@ -273,6 +280,12 @@ class TestTVBackupMatcher(unittest.TestCase):
         self.assertEqual(parse_timestamp_str("00:02:10"), 130.0)
         with self.assertRaises(ValueError):
             parse_timestamp_str("invalid_time")
+        with self.assertRaises(ValueError):
+            parse_timestamp_str("-10")
+        with self.assertRaises(ValueError):
+            parse_timestamp_str("01:-10")
+        with self.assertRaises(ValueError):
+            parse_timestamp_str("")
 
     def test_credit_frames_do_not_early_exit(self):
         ep1 = EpisodeInfo(season=1, episode=1, title="The Laughing Fish", code="S01E01")

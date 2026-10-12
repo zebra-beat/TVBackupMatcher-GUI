@@ -5,7 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
-from .dovi import DoviOptions, convert_p7_to_p8, get_dovi_status, scan_dovi_file
+from .dovi import DoviOptions, convert_p7_to_p8, get_dovi_status
 from .matcher import is_confident_unique, rank_episodes_for_file, resolve_global_assignments, token_similarity
 from .media_tags import MediaInfo, TagOptions, build_sonarr_tags, probe_media_info
 from .metadata import EpisodeInfo, resolve_show_metadata
@@ -162,7 +162,7 @@ class MatchingPipeline:
                     ep = m["episode"]
                     warning, needs_review = self._match_flags(fp, m)
                     target = self._target_relpath(fp, ep)
-                    unchanged = os.path.join(self.series_dir, *target.split("/")) == fp
+                    unchanged = os.path.normpath(os.path.join(self.series_dir, target)) == os.path.normpath(fp)
                     has_cred = has_credit_keywords(m.get("ocr_text", ""))
                     counts["needs_review" if needs_review else "will_rename"] += 1
                     items.append({**base,
@@ -828,8 +828,8 @@ class MatchingPipeline:
             # 2. Compute final move targets (reflecting any converted Profile 8.1 tags)
             moves = []
             for fp, m in planned:
-                target = os.path.join(self.series_dir, *self._target_relpath(fp, m["episode"]).split("/"))
-                if fp != target:
+                target = os.path.normpath(os.path.join(self.series_dir, self._target_relpath(fp, m["episode"])))
+                if os.path.normpath(fp) != target:
                     moves.append((fp, target))
 
             exported_count = 0

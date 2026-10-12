@@ -1,13 +1,11 @@
 import os
 import shutil
-import socket
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from app import find_free_port, parse_args
-from server.api_server import GUIRequestHandler, run_server
+from server.api_server import GUIRequestHandler
 from tv_matcher.config import app_support_dir
 
 

@@ -10,7 +10,7 @@ from tv_matcher.dovi import (
     get_dovi_status,
     scan_dovi_file,
 )
-from tv_matcher.media_tags import MediaInfo, TagOptions
+from tv_matcher.media_tags import MediaInfo
 from tv_matcher.metadata import EpisodeInfo
 from tv_matcher.pipeline import MatchingPipeline
 

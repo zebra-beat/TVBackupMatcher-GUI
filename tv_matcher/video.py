@@ -61,21 +61,29 @@ def parse_frame_windows(spec: str) -> List[Tuple[float, float, float]]:
 def parse_timestamp_str(val) -> float:
     """
     Parses '72.5', '1:15', '01:15.5', or '00:01:15' into seconds as float.
-    Raises ValueError on invalid input.
+    Raises ValueError on invalid input or negative timestamps.
     """
     if isinstance(val, (int, float)):
-        return float(val)
-    val = str(val).strip()
-    if not val:
-        raise ValueError("Empty timestamp value.")
-    if ":" in val:
-        parts = [float(p) for p in val.split(":")]
-        if len(parts) == 2:
-            return parts[0] * 60.0 + parts[1]
-        elif len(parts) == 3:
-            return parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]
-        raise ValueError(f"Invalid timestamp format '{val}'. Use '72.5' or '01:15'.")
-    return float(val)
+        res = float(val)
+    else:
+        val = str(val).strip()
+        if not val:
+            raise ValueError("Empty timestamp value.")
+        if ":" in val:
+            parts = [float(p) for p in val.split(":")]
+            if any(p < 0 for p in parts):
+                raise ValueError(f"Timestamp components cannot be negative: '{val}'")
+            if len(parts) == 2:
+                res = parts[0] * 60.0 + parts[1]
+            elif len(parts) == 3:
+                res = parts[0] * 3600.0 + parts[1] * 60.0 + parts[2]
+            else:
+                raise ValueError(f"Invalid timestamp format '{val}'. Use '72.5' or '01:15'.")
+        else:
+            res = float(val)
+    if res < 0:
+        raise ValueError(f"Timestamp cannot be negative: '{val}'")
+    return res
 
 
 def build_candidate_timestamps(info: VideoInfo, frame_windows: str = DEFAULT_FRAME_WINDOWS,

@@ -4,11 +4,10 @@ Extracts resolution, video codec, dynamic range / HDR / Dolby Vision (including 
 and audio codecs via ffprobe, and generates standardized release naming tags.
 """
 import os
-import re
 import json
 import subprocess
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 from .config import FFPROBE_BIN
 
