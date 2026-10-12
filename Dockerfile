@@ -27,7 +27,7 @@ RUN set -eux; \
         *) echo "Unsupported architecture for dovi_tool: ${dpkg_arch}"; exit 1 ;; \
     esac; \
     curl -fsSL "https://github.com/quietvoid/dovi_tool/releases/download/${DOVI_TOOL_VERSION}/dovi_tool-${DOVI_TOOL_VERSION}-${dovi_arch}-unknown-linux-musl.tar.gz" -o /tmp/dovi_tool.tar.gz; \
-    tar -xzf /tmp/dovi_tool.tar.gz -C /usr/local/bin dovi_tool; \
+    tar -xzf /tmp/dovi_tool.tar.gz -C /usr/local/bin; \
     chmod +x /usr/local/bin/dovi_tool; \
     rm /tmp/dovi_tool.tar.gz
 
