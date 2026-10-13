@@ -48,7 +48,9 @@ init_bundled_environment()
 
 def _can_run_binary(path: str, name: str) -> bool:
     """Verifies that an executable can actually run without crashing (e.g. missing dyld libraries)."""
-    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+    if not os.path.isfile(path):
+        return False
+    if sys.platform != "win32" and not os.access(path, os.X_OK):
         return False
     if path.endswith(".py"):
         return True
@@ -73,45 +75,78 @@ def find_binary(name: str, fallback_paths=None) -> str:
     # 1. Bundled directories
     exe_dir = os.path.dirname(os.path.abspath(sys.executable))
     contents_dir = os.path.abspath(os.path.join(exe_dir, ".."))
-    bundle_candidates = [
-        os.path.join(exe_dir, "bin", name),
-        os.path.join(exe_dir, name),
-        os.path.join(contents_dir, "MacOS", "bin", name),
-        os.path.join(contents_dir, "Resources", "bin", name),
-    ]
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+
+    names = [name]
+    if sys.platform == "win32" and not name.lower().endswith(".exe"):
+        names.append(f"{name}.exe")
+
+    bundle_candidates = []
+    for n in names:
         bundle_candidates.extend([
-            os.path.join(sys._MEIPASS, "bin", name),
-            os.path.join(sys._MEIPASS, name),
+            os.path.join(exe_dir, "bin", n),
+            os.path.join(exe_dir, n),
+            os.path.join(contents_dir, "MacOS", "bin", n),
+            os.path.join(contents_dir, "Resources", "bin", n),
         ])
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            bundle_candidates.extend([
+                os.path.join(sys._MEIPASS, "bin", n),
+                os.path.join(sys._MEIPASS, n),
+            ])
+
     for cand in bundle_candidates:
         if _can_run_binary(cand, name):
             return cand
 
     # 2. PATH resolution (including prepended bundle bin paths)
-    path = shutil.which(name)
-    if path and _can_run_binary(path, name):
-        return path
+    for n in names:
+        try:
+            path = shutil.which(n)
+        except Exception:
+            path = None
+        if path and _can_run_binary(path, name):
+            return path
 
     # 3. Fallbacks
-    fallbacks = fallback_paths or [
-        f"/opt/homebrew/bin/{name}",
-        f"/usr/local/bin/{name}",
-        f"/usr/bin/{name}",
-        f"/bin/{name}"
-    ]
+    fallbacks = list(fallback_paths) if fallback_paths else []
+    if sys.platform == "win32":
+        prog_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        prog_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        fallbacks.extend([
+            os.path.join(prog_files, "Tesseract-OCR", "tesseract.exe"),
+            os.path.join(prog_files_x86, "Tesseract-OCR", "tesseract.exe"),
+            os.path.join(local_app_data, "Programs", "Tesseract-OCR", "tesseract.exe"),
+            r"C:\ffmpeg\bin\ffmpeg.exe",
+            r"C:\ffmpeg\bin\ffprobe.exe",
+            os.path.join(prog_files, "ffmpeg", "bin", f"{name}.exe"),
+            os.path.join(local_app_data, "Microsoft", "WinGet", "Links", f"{name}.exe"),
+        ])
+    else:
+        fallbacks.extend([
+            f"/opt/homebrew/bin/{name}",
+            f"/usr/local/bin/{name}",
+            f"/usr/bin/{name}",
+            f"/bin/{name}"
+        ])
+
     for fb in fallbacks:
         if _can_run_binary(fb, name):
             return fb
 
     # Last resort fallback if _can_run_binary check fails (e.g. mock unit tests)
     for cand in bundle_candidates:
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+        if os.path.isfile(cand) and (sys.platform == "win32" or os.access(cand, os.X_OK)):
             return cand
-    if path and os.path.isfile(path) and os.access(path, os.X_OK):
-        return path
+    for n in names:
+        try:
+            path = shutil.which(n)
+        except Exception:
+            path = None
+        if path and os.path.isfile(path) and (sys.platform == "win32" or os.access(path, os.X_OK)):
+            return path
     for fb in fallbacks:
-        if os.path.isfile(fb) and os.access(fb, os.X_OK):
+        if os.path.isfile(fb) and (sys.platform == "win32" or os.access(fb, os.X_OK)):
             return fb
 
     return ""

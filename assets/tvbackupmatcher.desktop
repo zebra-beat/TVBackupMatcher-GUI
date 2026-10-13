@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TVBackupMatcher
+GenericName=TV Series Title Card Matcher
+Comment=Automated Video Title Card OCR, Safe Reorganization & Jellyfin / Plex Matching
+Exec=tvbackupmatcher
+Icon=tvbackupmatcher
+Terminal=true
+Categories=AudioVideo;Video;Utility;
+Keywords=tv;matcher;ocr;titlecard;jellyfin;plex;sonarr;

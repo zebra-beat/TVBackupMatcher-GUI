@@ -207,6 +207,47 @@ class TestServerAndPackaging(unittest.TestCase):
         self.assertEqual(rec["confirmation_type"], "manual")
         os.environ.pop("TVMATCHER_DB_PATH", None)
 
+    def test_appimage_and_windows_packaging_helpers(self):
+        import build_appimage
+        import build_windows_portable
+        from tv_matcher.config import find_binary
+
+        # 1. Test get_target_arch
+        arch = build_appimage.get_target_arch()
+        self.assertIn(arch, ("x86_64", "aarch64"))
+
+        # 2. Test prepare_appdir
+        mock_bin = os.path.join(self.test_dir, "tvbackupmatcher")
+        with open(mock_bin, "w") as f:
+            f.write("#!/bin/sh\necho test\n")
+        os.chmod(mock_bin, 0o755)
+
+        test_appdir = os.path.join(self.test_dir, "AppDir")
+        with patch("build_appimage.APPDIR", test_appdir):
+            build_appimage.prepare_appdir(mock_bin)
+            self.assertTrue(os.path.isfile(os.path.join(test_appdir, "AppRun")))
+            self.assertTrue(os.path.isfile(os.path.join(test_appdir, "tvbackupmatcher.desktop")))
+            self.assertTrue(os.path.isfile(os.path.join(test_appdir, "usr", "bin", "tvbackupmatcher")))
+
+        # 3. Test package_windows_portable
+        with patch("build_windows_portable.DIST_DIR", self.test_dir), \
+             patch("build_windows_portable.PORTABLE_DIR", os.path.join(self.test_dir, "portable")), \
+             patch("build_windows_portable.ensure_windows_binary", return_value=mock_bin):
+            exe_p, zip_p = build_windows_portable.package_windows_portable(
+                output_exe_name="test_portable.exe",
+                output_zip_name="test_portable.zip"
+            )
+            self.assertTrue(os.path.isfile(exe_p))
+            self.assertTrue(os.path.isfile(zip_p))
+
+        # 4. Test Windows binary detection logic
+        with patch("sys.platform", "win32"):
+            mock_win_tess = os.path.join(self.test_dir, "tesseract.exe")
+            with open(mock_win_tess, "w") as f:
+                f.write("mock tesseract")
+            found = find_binary("tesseract", fallback_paths=[mock_win_tess])
+            self.assertEqual(found, mock_win_tess)
+
 
 if __name__ == "__main__":
     unittest.main()

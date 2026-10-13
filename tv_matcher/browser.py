@@ -72,6 +72,16 @@ def browse_directory(target_path: str = "") -> dict:
     except (OSError, PermissionError):
         pass
 
+    if sys.platform == "win32":
+        import string
+        for letter in string.ascii_uppercase:
+            drive = f"{letter}:\\"
+            try:
+                if os.path.isdir(drive):
+                    shortcuts.append({"name": f"Drive ({letter}:)", "path": drive, "icon": "💾"})
+            except (OSError, PermissionError):
+                pass
+
     for name, p, icon in candidates:
         try:
             if os.path.isdir(p) and os.access(p, os.R_OK):

@@ -1,7 +1,7 @@
 # TVBackupMatcher GUI 🎬📺
 
 [![Release](https://img.shields.io/github/v/release/zebra-beat/TVBackupMatcher-GUI?include_prereleases&style=flat-square&color=blue)](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Docker-brightgreen?style=flat-square)](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20%7C%20Docker-brightgreen?style=flat-square)](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases)
 [![Python](https://img.shields.io/badge/python-3.8%2B-blue?style=flat-square)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 
@@ -15,7 +15,7 @@ A modern, bulletproof desktop and web application to match, OCR, and organize TV
 
 Choose the method that best fits your workflow:
 
-### Option 1: macOS DMG Installer (Easiest — Zero Prerequisites!)
+### Option 1: macOS DMG Installer (Zero Prerequisites!)
 Download the official **`TVBackupMatcher-macOS.dmg`** from [**Latest GitHub Releases**](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases/latest):
 1. Double-click **`TVBackupMatcher-macOS.dmg`** to mount it.
 2. Drag **`TVBackupMatcher.app`** into your **Applications** folder.
@@ -25,7 +25,29 @@ Download the official **`TVBackupMatcher-macOS.dmg`** from [**Latest GitHub Rele
 
 ---
 
-### Option 2: Docker Container (unRAID / TrueNAS / Synology / Linux Server)
+### Option 2: Linux AppImage (Ubuntu, Debian, Fedora, Arch & Steam Deck)
+Download **`TVBackupMatcher-Linux-x86_64.AppImage`** from [**Latest GitHub Releases**](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases/latest):
+```bash
+# Make executable and launch:
+chmod +x TVBackupMatcher-Linux-x86_64.AppImage
+./TVBackupMatcher-Linux-x86_64.AppImage
+```
+* **Desktop Integration:** Integrates into your application menu with desktop icon and categories.
+* **Auto-Browser Launch:** Automatically boots the local daemon and launches your default web browser to the GUI.
+
+---
+
+### Option 3: Windows Portable Edition (Windows 10 & 11)
+Download **`TVBackupMatcher-Windows-x86_64.exe`** or **`TVBackupMatcher-Windows-Portable.zip`** from [**Latest GitHub Releases**](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases/latest):
+1. Extract or run **`TVBackupMatcher.exe`** (or double-click **`Launch TVBackupMatcher.bat`**).
+2. The browser automatically opens to `http://127.0.0.1:8765`.
+* **Zero Installation:** No installer needed — runs portably from any directory, USB drive, or NAS share.
+* **Tool Detection:** Auto-detects `ffmpeg.exe` and `tesseract.exe` from `winget`, system PATH, standard Program Files, or simply placed next to the executable in a `bin/` subfolder.
+* **Native Windows Dialog:** Native folder browser support through Windows PowerShell.
+
+---
+
+### Option 4: Docker Container (unRAID / TrueNAS / Synology / Linux Server)
 Run completely containerized with all dependencies pre-installed (including full Dolby Vision conversion tools):
 
 #### Using Docker Compose (Recommended)
@@ -78,7 +100,7 @@ docker run -d \
 
 ---
 
-### Option 3: Standalone Single Executable (macOS & Linux)
+### Option 5: Standalone Single Executable (macOS & Linux)
 Download `tvbackupmatcher-macos-arm64` or `tvbackupmatcher-linux-x86_64` from [Releases](https://github.com/zebra-beat/TVBackupMatcher-GUI/releases/latest), or compile from source:
 ```bash
 # Compile standalone binary:
@@ -93,7 +115,7 @@ python3 build_bundle.py --install-deps
 
 ---
 
-### Option 4: Run From Source / Double-Click Launcher
+### Option 6: Run From Source / Double-Click Launcher
 Requirements: macOS or Linux with Python 3.8+, `ffmpeg`, `ffprobe`, and `tesseract` (`brew install ffmpeg tesseract`):
 
 * **Finder Launcher:** Double-click `Launch TVBackupMatcher GUI.command`

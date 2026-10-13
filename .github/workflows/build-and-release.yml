@@ -39,7 +39,7 @@ jobs:
 
       - name: Verify Python compilation
         run: |
-          python3 -m py_compile app.py gui_desktop.py build_bundle.py build_dmg.py server/*.py tv_matcher/*.py tests/*.py
+          python3 -m py_compile app.py gui_desktop.py build_bundle.py build_dmg.py build_appimage.py build_windows_portable.py server/*.py tv_matcher/*.py tests/*.py
 
       - name: Verify JavaScript syntax
         run: |
@@ -152,6 +152,76 @@ jobs:
           path: dist/TVBackupMatcher-macOS-app.zip
           if-no-files-found: error
 
+  build-linux-appimage:
+    name: Build Linux AppImage (x86_64)
+    needs: test
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 file
+
+      - name: Install PyInstaller
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyinstaller
+
+      - name: Build Linux AppImage
+        run: |
+          python3 build_appimage.py
+
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBackupMatcher-Linux-x86_64.AppImage
+          path: dist/TVBackupMatcher-Linux-x86_64.AppImage
+          if-no-files-found: error
+
+  build-windows-portable:
+    name: Build Windows Portable Executable (x86_64)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyinstaller
+
+      - name: Build Windows Portable EXE and ZIP
+        run: |
+          python build_windows_portable.py
+
+      - name: Upload Windows Portable EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBackupMatcher-Windows-x86_64.exe
+          path: dist/TVBackupMatcher-Windows-x86_64.exe
+          if-no-files-found: error
+
+      - name: Upload Windows Portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: TVBackupMatcher-Windows-Portable.zip
+          path: dist/TVBackupMatcher-Windows-Portable.zip
+          if-no-files-found: error
+
   build-docker:
     name: Build Docker Container (Multi-Arch)
     needs: test
@@ -177,7 +247,7 @@ jobs:
   release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_release == true
-    needs: [build-executables, build-macos-dmg, build-docker]
+    needs: [build-executables, build-linux-appimage, build-windows-portable, build-macos-dmg, build-docker]
     runs-on: ubuntu-latest
     permissions:
       contents: write
