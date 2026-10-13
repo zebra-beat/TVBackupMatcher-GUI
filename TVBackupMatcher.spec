@@ -15,6 +15,7 @@ binaries = []
 
 hiddenimports = [
     'tv_matcher',
+    'tv_matcher.browser',
     'tv_matcher.config',
     'tv_matcher.database',
     'tv_matcher.dovi',

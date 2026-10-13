@@ -5,6 +5,7 @@ import os
 import urllib.parse
 from typing import Optional, Union
 
+from tv_matcher.browser import browse_directory, choose_native_folder
 from tv_matcher.config import add_recent_dir, get_system_status, load_settings, save_settings
 from tv_matcher.database import get_all_records, get_raw_disc_records, get_records_for_series
 from tv_matcher.dovi import get_dovi_status
@@ -113,6 +114,13 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
             series = params.get("series", [""])[0]
             recs = get_raw_disc_records(series or None)
             self.send_json({"raw_discs": list(recs.values()), "count": len(recs)})
+            return
+
+        if path == "/api/browse_dir":
+            params = urllib.parse.parse_qs(parsed.query)
+            target = params.get("path", [""])[0]
+            result = browse_directory(target)
+            self.send_json(result)
             return
 
         if path == "/api/thumbnail":
@@ -294,6 +302,11 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
                 start_time = data.get("start_time", 50.0)
                 duration = data.get("duration", 20.0)
                 self.send_json(self.pipeline.generate_scrub_preview(file_path, start_time=start_time, duration=duration))
+
+            elif path == "/api/choose_folder_native":
+                initial_dir = str(data.get("initial_dir", "")).strip()
+                res = choose_native_folder(initial_dir)
+                self.send_json(res)
 
             else:
                 self.send_error(404, "Not Found")

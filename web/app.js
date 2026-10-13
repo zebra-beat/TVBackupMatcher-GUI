@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
   checkSystemStatus();
   loadUserSettings();
   pollState();
+  initDirAutocomplete();
 });
 
 async function checkSystemStatus() {
@@ -1586,3 +1587,377 @@ async function captureExactTime(filePath, timestamp) {
     }
   }
 }
+
+// ------------------------------------------------------------- Dynamic Folder Browser & Autocomplete
+
+let dirBrowserState = {
+  currentPath: "",
+  selectedPath: "",
+  parentPath: null,
+  breadcrumbs: [],
+  shortcuts: [],
+  directories: [],
+  videoFiles: [],
+  videoCount: 0,
+  filterQuery: "",
+};
+
+async function openDirBrowser(initialPath) {
+  const modal = document.getElementById("dir-browser-modal");
+  if (!modal) return;
+  modal.style.display = "flex";
+
+  const target = initialPath || document.getElementById("series-dir").value.trim() || "";
+  const filterInp = document.getElementById("dir-filter-input");
+  if (filterInp) filterInp.value = "";
+  dirBrowserState.filterQuery = "";
+  await loadBrowseDirectory(target);
+}
+
+function closeDirBrowser() {
+  const modal = document.getElementById("dir-browser-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function loadBrowseDirectory(targetPath) {
+  const listEl = document.getElementById("dir-list");
+  if (listEl) {
+    listEl.innerHTML = `<div class="dir-empty-state"><div class="spinner" style="margin: 0 auto 8px;"></div>Loading folders...</div>`;
+  }
+  try {
+    const res = await fetch(`/api/browse_dir?path=${encodeURIComponent(targetPath || "")}`);
+    const data = await res.json();
+    if (!data.success && !data.current_path) {
+      if (listEl) listEl.innerHTML = `<div class="dir-empty-state">Error: ${escapeHtml(data.error || "Could not read directory")}</div>`;
+      return;
+    }
+
+    dirBrowserState.currentPath = data.current_path || "";
+    dirBrowserState.selectedPath = data.current_path || "";
+    dirBrowserState.parentPath = data.parent_path || null;
+    dirBrowserState.breadcrumbs = data.breadcrumbs || [];
+    dirBrowserState.shortcuts = data.shortcuts || [];
+    dirBrowserState.directories = data.directories || [];
+    dirBrowserState.videoFiles = data.video_files || [];
+    dirBrowserState.videoCount = data.video_count || 0;
+
+    renderDirShortcuts();
+    renderDirBreadcrumbs();
+    renderDirStatus();
+    renderDirList();
+    renderDirVideos();
+    updateDirSelectedDisplay();
+  } catch (err) {
+    console.error("Failed to browse directory:", err);
+    if (listEl) listEl.innerHTML = `<div class="dir-empty-state">Failed to connect to server</div>`;
+  }
+}
+
+function navDirUp() {
+  if (dirBrowserState.parentPath) {
+    loadBrowseDirectory(dirBrowserState.parentPath);
+  }
+}
+
+function renderDirShortcuts() {
+  const cont = document.getElementById("dir-shortcuts-list");
+  if (!cont) return;
+  cont.innerHTML = "";
+  dirBrowserState.shortcuts.forEach(sc => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "dir-shortcut-chip";
+    chip.innerHTML = `<span>${sc.icon || "📁"}</span> <span>${escapeHtml(sc.name)}</span>`;
+    chip.title = sc.path;
+    chip.onclick = () => loadBrowseDirectory(sc.path);
+    cont.appendChild(chip);
+  });
+}
+
+function renderDirBreadcrumbs() {
+  const bc = document.getElementById("dir-breadcrumbs");
+  const upBtn = document.getElementById("btn-dir-up");
+  if (upBtn) upBtn.disabled = !dirBrowserState.parentPath;
+  if (!bc) return;
+  bc.innerHTML = "";
+
+  const crumbs = dirBrowserState.breadcrumbs;
+  crumbs.forEach((crumb, idx) => {
+    const isLast = (idx === crumbs.length - 1);
+    const span = document.createElement("span");
+    span.className = `dir-crumb ${isLast ? "active" : ""}`;
+    span.textContent = crumb.name;
+    span.title = crumb.path;
+    span.onclick = () => loadBrowseDirectory(crumb.path);
+    bc.appendChild(span);
+
+    if (!isLast) {
+      const sep = document.createElement("span");
+      sep.className = "dir-crumb-sep";
+      sep.textContent = "/";
+      bc.appendChild(sep);
+    }
+  });
+  bc.scrollLeft = bc.scrollWidth;
+}
+
+function renderDirStatus() {
+  const banner = document.getElementById("dir-status-banner");
+  if (!banner) return;
+  const vCount = dirBrowserState.videoCount;
+  const dCount = dirBrowserState.directories.length;
+
+  if (vCount > 0) {
+    banner.className = "dir-status-banner has-videos";
+    banner.style.display = "flex";
+    banner.innerHTML = `<span>🎬</span> <strong>${vCount} video file${vCount === 1 ? "" : "s"} detected directly in this folder!</strong> (${dCount} subfolder${dCount === 1 ? "" : "s"})`;
+  } else if (dCount > 0) {
+    banner.className = "dir-status-banner no-videos";
+    banner.style.display = "flex";
+    banner.innerHTML = `<span>📁</span> <span>No video files directly in this folder. Click any of the <strong>${dCount}</strong> subfolders below to drill down.</span>`;
+  } else {
+    banner.className = "dir-status-banner no-videos";
+    banner.style.display = "flex";
+    banner.innerHTML = `<span>ℹ️</span> <span>Folder is empty or contains no media files.</span>`;
+  }
+}
+
+function renderDirList() {
+  const listEl = document.getElementById("dir-list");
+  const countEl = document.getElementById("dir-item-count");
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  const q = (dirBrowserState.filterQuery || "").toLowerCase().trim();
+  const filtered = dirBrowserState.directories.filter(d => !q || d.name.toLowerCase().includes(q));
+
+  if (countEl) {
+    countEl.textContent = `${filtered.length} of ${dirBrowserState.directories.length} folder${dirBrowserState.directories.length === 1 ? "" : "s"}`;
+  }
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = `<div class="dir-empty-state">${q ? 'No matching folders found for "' + escapeHtml(q) + '"' : 'No subfolders found.'}</div>`;
+    return;
+  }
+
+  filtered.forEach(d => {
+    const item = document.createElement("div");
+    item.className = `dir-item ${dirBrowserState.selectedPath === d.path ? "selected" : ""}`;
+
+    const left = document.createElement("div");
+    left.className = "dir-item-left";
+    left.innerHTML = `<span class="dir-item-icon">📁</span><span class="dir-item-name" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>`;
+
+    const right = document.createElement("div");
+    right.className = "dir-item-right";
+    if (d.video_count > 0) {
+      const vBadge = document.createElement("span");
+      vBadge.className = "dir-badge-video";
+      vBadge.textContent = `🎬 ${d.video_count} video${d.video_count === 1 ? "" : "s"}`;
+      right.appendChild(vBadge);
+    }
+    const chevron = document.createElement("span");
+    chevron.className = "dir-item-chevron";
+    chevron.textContent = "›";
+    right.appendChild(chevron);
+
+    item.appendChild(left);
+    item.appendChild(right);
+
+    item.onclick = () => {
+      dirBrowserState.selectedPath = d.path;
+      document.querySelectorAll(".dir-item").forEach(el => el.classList.remove("selected"));
+      item.classList.add("selected");
+      updateDirSelectedDisplay();
+    };
+
+    item.ondblclick = () => {
+      loadBrowseDirectory(d.path);
+    };
+
+    listEl.appendChild(item);
+  });
+}
+
+function onFilterDirList() {
+  const inp = document.getElementById("dir-filter-input");
+  dirBrowserState.filterQuery = inp ? inp.value : "";
+  renderDirList();
+}
+
+function renderDirVideos() {
+  const wrap = document.getElementById("dir-videos-preview");
+  const tags = document.getElementById("dir-videos-tags");
+  if (!wrap || !tags) return;
+  tags.innerHTML = "";
+  if (dirBrowserState.videoFiles && dirBrowserState.videoFiles.length > 0) {
+    wrap.style.display = "block";
+    dirBrowserState.videoFiles.forEach(vf => {
+      const pill = document.createElement("span");
+      pill.className = "dir-video-pill";
+      pill.textContent = vf;
+      tags.appendChild(pill);
+    });
+    if (dirBrowserState.videoCount > dirBrowserState.videoFiles.length) {
+      const more = document.createElement("span");
+      more.className = "dir-video-pill";
+      more.style.opacity = "0.7";
+      more.textContent = `+${dirBrowserState.videoCount - dirBrowserState.videoFiles.length} more...`;
+      tags.appendChild(more);
+    }
+  } else {
+    wrap.style.display = "none";
+  }
+}
+
+function updateDirSelectedDisplay() {
+  const disp = document.getElementById("dir-current-display");
+  if (disp) {
+    disp.textContent = dirBrowserState.selectedPath || dirBrowserState.currentPath || "/";
+  }
+}
+
+function confirmDirSelection() {
+  const chosen = dirBrowserState.selectedPath || dirBrowserState.currentPath;
+  if (!chosen) return;
+  document.getElementById("series-dir").value = chosen;
+  closeDirBrowser();
+
+  const seriesNameInput = document.getElementById("series-name");
+  if (seriesNameInput && !seriesNameInput.value.trim()) {
+    const base = chosen.split(/[/\\]/).filter(Boolean).pop();
+    if (base) {
+      seriesNameInput.placeholder = `Auto-detected: ${base}`;
+    }
+  }
+}
+
+async function pickNativeFolder() {
+  const currentVal = document.getElementById("series-dir").value.trim();
+  try {
+    const res = await fetch("/api/choose_folder_native", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initial_dir: currentVal }),
+    });
+    const data = await res.json();
+    if (data.success && data.path) {
+      document.getElementById("series-dir").value = data.path;
+      closeDirBrowser();
+      const seriesNameInput = document.getElementById("series-name");
+      if (seriesNameInput && !seriesNameInput.value.trim()) {
+        const base = data.path.split(/[/\\]/).filter(Boolean).pop();
+        if (base) {
+          seriesNameInput.placeholder = `Auto-detected: ${base}`;
+        }
+      }
+    } else if (data.error && data.error !== "Cancelled") {
+      alert(`Native Folder Picker: ${data.error}`);
+    }
+  } catch (err) {
+    console.error("Native folder chooser error:", err);
+  }
+}
+
+function initDirAutocomplete() {
+  const input = document.getElementById("series-dir");
+  const dropdown = document.getElementById("dir-autocomplete");
+  if (!input || !dropdown) return;
+
+  let debounceTimer = null;
+  let activeIndex = -1;
+
+  async function updateAutocomplete() {
+    const val = input.value.trim();
+    if (!val || val.length < 2) {
+      dropdown.style.display = "none";
+      dropdown.innerHTML = "";
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/browse_dir?path=${encodeURIComponent(val)}`);
+      const data = await res.json();
+      if (!data.success || !data.directories || data.directories.length === 0) {
+        dropdown.style.display = "none";
+        return;
+      }
+
+      dropdown.innerHTML = "";
+      activeIndex = -1;
+
+      const term = val.split(/[/\\]/).pop().toLowerCase();
+      const matches = data.directories.filter(d => !term || d.name.toLowerCase().includes(term));
+      const listToRender = (matches.length > 0 ? matches : data.directories).slice(0, 8);
+
+      listToRender.forEach((d) => {
+        const item = document.createElement("div");
+        item.className = "dir-auto-item";
+        item.innerHTML = `
+          <div class="dir-auto-item-name">
+            <span>📁</span>
+            <span>${escapeHtml(d.name)}</span>
+          </div>
+          ${d.video_count > 0 ? `<span class="dir-auto-badge">🎬 ${d.video_count}</span>` : ""}
+        `;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          input.value = d.path;
+          dropdown.style.display = "none";
+          // If folder has subfolders, immediately query them so the user can continue drilling down
+          if (d.has_subdirs) {
+            updateAutocomplete();
+          }
+        };
+        dropdown.appendChild(item);
+      });
+
+      const footer = document.createElement("div");
+      footer.className = "dir-auto-footer";
+      footer.innerHTML = `<span>📁</span> <span>Open Full Folder Browser...</span>`;
+      footer.onclick = (e) => {
+        e.stopPropagation();
+        dropdown.style.display = "none";
+        openDirBrowser(val);
+      };
+      dropdown.appendChild(footer);
+
+      dropdown.style.display = "flex";
+    } catch (_) {
+      dropdown.style.display = "none";
+    }
+  }
+
+  input.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(updateAutocomplete, 250);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (dropdown.style.display === "none") return;
+    const items = dropdown.querySelectorAll(".dir-auto-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeIndex = (activeIndex + 1) % items.length;
+      items.forEach((it, i) => it.classList.toggle("active", i === activeIndex));
+      if (items[activeIndex]) items[activeIndex].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIndex = (activeIndex - 1 + items.length) % items.length;
+      items.forEach((it, i) => it.classList.toggle("active", i === activeIndex));
+      if (items[activeIndex]) items[activeIndex].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && activeIndex >= 0 && items[activeIndex]) {
+      e.preventDefault();
+      items[activeIndex].click();
+    } else if (e.key === "Escape") {
+      dropdown.style.display = "none";
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.style.display = "none";
+    }
+  });
+}
+

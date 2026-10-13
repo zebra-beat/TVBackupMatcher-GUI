@@ -36,10 +36,19 @@
           </div>
         </div>
         <div class="card-body">
-          <div class="form-group">
+          <div class="form-group dir-input-group">
             <label for="series-dir">Media Backup Folder Path:</label>
             <div class="input-with-button">
-              <input type="text" id="series-dir" placeholder="/path/to/TV Shows/Show Name (Year) [tmdbid-1234]" autocomplete="off">
+              <div class="input-autocomplete-wrapper">
+                <input type="text" id="series-dir" placeholder="/path/to/TV Shows/Show Name (Year) [tmdbid-1234]" autocomplete="off">
+                <div class="dir-autocomplete-dropdown" id="dir-autocomplete" style="display: none;"></div>
+              </div>
+              <button type="button" class="btn btn-secondary" id="btn-browse-dir" onclick="openDirBrowser()" title="Browse and click through folders">
+                📁 Browse...
+              </button>
+              <button type="button" class="btn btn-secondary" id="btn-native-picker" onclick="pickNativeFolder()" title="Open System Folder Picker (Finder)">
+                🖥️ Finder...
+              </button>
             </div>
             <div class="preset-chips" id="recent-chips" style="display: none;">
               <span class="chip-label">Recent Folders:</span>
@@ -366,6 +375,76 @@
         <div class="filmstrip-container" id="scrub-filmstrip"></div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- Modal Dialog for Interactive Directory Browser -->
+  <div class="modal" id="dir-browser-modal" onclick="closeDirBrowser()">
+    <div class="modal-content dir-modal-content" onclick="event.stopPropagation()">
+      <span class="close-btn" onclick="closeDirBrowser()">&times;</span>
+      
+      <div class="dir-modal-header">
+        <div class="dir-modal-title-row">
+          <h3>📁 Browse Media Backup Folder</h3>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="pickNativeFolder()" title="Choose via native macOS Finder dialog">
+            🖥️ Open Native Finder...
+          </button>
+        </div>
+        <p class="dir-modal-subtitle">Click through folders to locate your TV series files. Folders with video files are highlighted.</p>
+      </div>
+
+      <!-- Quick Access Shortcuts -->
+      <div class="dir-shortcuts-bar">
+        <span class="dir-shortcuts-label">Quick Jump:</span>
+        <div class="dir-shortcuts-list" id="dir-shortcuts-list">
+          <!-- Populated dynamically: Home, Movies, TV Shows, Volumes, Downloads -->
+        </div>
+      </div>
+
+      <!-- Interactive Breadcrumb Location Bar -->
+      <div class="dir-breadcrumb-bar">
+        <button type="button" class="dir-nav-btn" id="btn-dir-up" onclick="navDirUp()" title="Go up one folder">⬆ Up</button>
+        <div class="dir-breadcrumbs" id="dir-breadcrumbs">
+          <!-- Populated dynamically: / > Users > name > Movies > ... -->
+        </div>
+      </div>
+
+      <!-- Filter / Search In Current Folder -->
+      <div class="dir-filter-bar">
+        <span class="dir-filter-icon">🔍</span>
+        <input type="text" id="dir-filter-input" placeholder="Type to filter folders in current view..." oninput="onFilterDirList()">
+        <span class="dir-item-count" id="dir-item-count">0 folders</span>
+      </div>
+
+      <!-- Current Folder Status Banner -->
+      <div class="dir-status-banner" id="dir-status-banner" style="display: none;"></div>
+
+      <!-- Scrollable Directories List -->
+      <div class="dir-list-wrap">
+        <div class="dir-list" id="dir-list">
+          <!-- Populated dynamically with folders -->
+        </div>
+      </div>
+
+      <!-- Sample Video Files in Selected Folder (if any) -->
+      <div class="dir-videos-preview" id="dir-videos-preview" style="display: none;">
+        <div class="dir-videos-header">🎬 Video Files Detected in this Folder:</div>
+        <div class="dir-videos-tags" id="dir-videos-tags"></div>
+      </div>
+
+      <!-- Modal Footer Action Bar -->
+      <div class="dir-modal-footer">
+        <div class="dir-current-path-display">
+          <span class="dir-path-label">Selected:</span>
+          <span class="dir-path-val" id="dir-current-display">/</span>
+        </div>
+        <div class="dir-footer-buttons">
+          <button type="button" class="btn btn-secondary" onclick="closeDirBrowser()">Cancel</button>
+          <button type="button" class="btn btn-success" id="btn-select-dir" onclick="confirmDirSelection()">
+            ✅ Select This Folder
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
