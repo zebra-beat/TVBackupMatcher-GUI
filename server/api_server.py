@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Optional, Union
 
 from tv_matcher.config import add_recent_dir, get_system_status, load_settings, save_settings
+from tv_matcher.database import get_all_records, get_raw_disc_records, get_records_for_series
 from tv_matcher.dovi import get_dovi_status
 from tv_matcher.pipeline import MatchingPipeline
 
@@ -95,6 +96,23 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/dovi/options":
             self.send_json(self.pipeline.dovi_options.to_dict())
+            return
+
+        if path == "/api/database_records":
+            params = urllib.parse.parse_qs(parsed.query)
+            series = params.get("series", [""])[0]
+            if series:
+                records = get_records_for_series(series)
+            else:
+                records = get_all_records(limit=200)
+            self.send_json({"records": records, "count": len(records)})
+            return
+
+        if path == "/api/database_raw_discs":
+            params = urllib.parse.parse_qs(parsed.query)
+            series = params.get("series", [""])[0]
+            recs = get_raw_disc_records(series or None)
+            self.send_json({"raw_discs": list(recs.values()), "count": len(recs)})
             return
 
         if path == "/api/thumbnail":

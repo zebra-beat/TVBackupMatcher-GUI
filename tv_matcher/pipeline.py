@@ -6,6 +6,16 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
+from .database import (
+    extract_raw_disc_tag,
+    get_all_records,
+    get_known_timestamps_for_series,
+    get_raw_disc_records,
+    get_records_for_series,
+    init_db,
+    is_raw_disc_file,
+    save_title_card_record,
+)
 from .dovi import DoviOptions, convert_p7_to_p8, get_dovi_status
 from .matcher import is_confident_unique, rank_episodes_for_file, resolve_global_assignments, token_similarity
 from .media_tags import MediaInfo, TagOptions, build_sonarr_tags, probe_media_info
@@ -89,6 +99,7 @@ class MatchingPipeline:
         self.matches: Dict[str, dict] = {}
         self.overrides: Dict[str, str] = {}  # file_path -> episode_code or SKIP
         self.unmatched_active_frames: Dict[str, str] = {}  # file_path -> active thumbnail image path
+        self.db_matched_files: Dict[str, dict] = {}        # file_path -> prior database record
         self.version = 0                     # bumps whenever results change (lets UIs skip re-renders)
 
         self.scan_dir = ""
@@ -96,6 +107,11 @@ class MatchingPipeline:
         self._cancel = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
+
+        try:
+            init_db()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ state
 
@@ -156,6 +172,9 @@ class MatchingPipeline:
 
                 sonarr_tag = build_sonarr_tags(media, self.tag_options, dv_converted=dv_conv) if (media and self.tag_options.enabled) else ""
 
+                is_raw = is_raw_disc_file(fp)
+                raw_tag = extract_raw_disc_tag(fp)
+
                 base = {
                     "file_path": fp,
                     "file_name": os.path.basename(fp),
@@ -168,6 +187,9 @@ class MatchingPipeline:
                     "has_dv_p7": has_dv_p7,
                     "convert_dv_p7": dv_conv,
                     "sonarr_tag": sonarr_tag,
+                    "is_raw_disc": is_raw,
+                    "raw_disc_tag": raw_tag,
+                    "db_matched": bool(fp in self.db_matched_files),
                 }
                 if m:
                     ep = m["episode"]
@@ -188,6 +210,7 @@ class MatchingPipeline:
                         "image_path": m.get("image_path") or "",
                         "is_overridden": bool(m.get("manual")),
                         "confirmed": bool(m.get("confirmed")),
+                        "confirmation_type": "manual" if (m.get("manual") or m.get("confirmed")) else "auto",
                         "needs_review": needs_review,
                         "has_credits": has_cred,
                         "warning": warning,
@@ -207,7 +230,7 @@ class MatchingPipeline:
                         "season": 0, "episode_num": 0, "score": 0.0, "timestamp": fallback_t,
                         "ocr_sample": active_item.get("ocr_sample", "") if active_item else "",
                         "has_thumbnail": bool(fallback_img and os.path.exists(fallback_img)), "image_path": fallback_img,
-                        "is_overridden": skipped, "confirmed": False, "needs_review": False,
+                        "is_overridden": skipped, "confirmed": False, "confirmation_type": "none", "needs_review": False,
                         "has_credits": False, "warning": "", "target_relpath": "", "already_named": False,
                         "status": "skipped" if skipped else "unmatched",
                     })
@@ -295,7 +318,13 @@ class MatchingPipeline:
     def _analyze_file(self, idx: int, fp: str, params: dict, scan_dir: str):
         info = probe_video(fp)
         media_info = probe_media_info(fp)
-        timestamps = build_candidate_timestamps(info, params["frame_windows"], params["use_chapters"])
+        
+        extra_ts = list(params.get("known_timestamps") or [])
+        raw_rec = params.get("raw_disc_records", {}).get(os.path.basename(fp))
+        if raw_rec and raw_rec.get("frame_time"):
+            extra_ts.insert(0, float(raw_rec["frame_time"]))
+
+        timestamps = build_candidate_timestamps(info, params["frame_windows"], params["use_chapters"], extra_timestamps=extra_ts)
         best: Dict[str, tuple] = {}
         frames: list = []
         fallback_frame = None
@@ -359,6 +388,19 @@ class MatchingPipeline:
             except Exception:
                 pass
 
+        # If a prior raw disc match was found for this file, boost the matching candidate
+        if raw_rec and raw_rec.get("episode_code"):
+            target_code = raw_rec["episode_code"]
+            boosted = []
+            for cand in candidates:
+                if cand[0].code == target_code:
+                    boosted.append((cand[0], min(1.0, cand[1] + 0.2), cand[2], cand[3], cand[4]))
+                else:
+                    boosted.append(cand)
+            candidates = sorted(boosted, key=lambda c: (-c[1], c[0].code))
+            with self._lock:
+                self.db_matched_files[fp] = raw_rec
+
         return candidates, info.duration, frames, media_info
 
     def _run_scan_thread(self, series_dir: str, params: dict):
@@ -391,6 +433,14 @@ class MatchingPipeline:
                 self.metadata_description = show.description
                 if not self.series_year:
                     self.series_year = show.year
+
+            # Query database for known title card timestamps & raw disc records for this series
+            try:
+                params["known_timestamps"] = get_known_timestamps_for_series(self.series_name)
+                params["raw_disc_records"] = get_raw_disc_records(self.series_name)
+            except Exception:
+                params["known_timestamps"] = []
+                params["raw_disc_records"] = {}
 
             # 4. Analyse files in parallel (each worker runs ffmpeg + tesseract processes)
             self.state = "processing"
@@ -448,6 +498,27 @@ class MatchingPipeline:
                 self.status_message = (f"Matching complete: {len(self.matches)} of {len(self.files)} files matched"
                                        + (f", {review} need review." if review else "."))
 
+                # Auto-save confident matches into database for future runs
+                for fp, m in self.matches.items():
+                    if not self._match_flags(fp, m)[1] and m.get("episode"):
+                        try:
+                            save_title_card_record(
+                                series_name=self.series_name,
+                                series_year=self.series_year,
+                                episode_code=m["episode"].code,
+                                episode_title=m["episode"].title,
+                                season_number=m["episode"].season,
+                                episode_number=m["episode"].episode,
+                                frame_time=m.get("timestamp", 0.0),
+                                file_path=fp,
+                                confirmation_type="auto",
+                                score=m.get("score", 1.0),
+                                ocr_text=m.get("ocr_text", ""),
+                                file_duration=self.file_info.get(fp, {}).get("duration"),
+                            )
+                        except Exception:
+                            pass
+
         except Exception as e:
             with self._lock:
                 self.state = "error"
@@ -498,6 +569,26 @@ class MatchingPipeline:
                 "manual": True,
             }
             self.overrides[file_path] = episode_code
+
+            # Save manual assignment to database
+            try:
+                save_title_card_record(
+                    series_name=self.series_name,
+                    series_year=self.series_year,
+                    episode_code=target_ep.code,
+                    episode_title=target_ep.title,
+                    season_number=target_ep.season,
+                    episode_number=target_ep.episode,
+                    frame_time=self.matches[file_path]["timestamp"],
+                    file_path=file_path,
+                    confirmation_type="manual",
+                    score=1.0,
+                    ocr_text=self.matches[file_path]["ocr_text"],
+                    file_duration=self.file_info.get(file_path, {}).get("duration"),
+                )
+            except Exception:
+                pass
+
             self._bump()
             return {"success": True, "displaced": os.path.basename(displaced) if displaced else None}
 
@@ -507,6 +598,27 @@ class MatchingPipeline:
             if not m:
                 return {"success": False, "error": "File has no match to confirm."}
             m["confirmed"] = True
+
+            # Save manual confirmation to database
+            if m.get("episode"):
+                try:
+                    save_title_card_record(
+                        series_name=self.series_name,
+                        series_year=self.series_year,
+                        episode_code=m["episode"].code,
+                        episode_title=m["episode"].title,
+                        season_number=m["episode"].season,
+                        episode_number=m["episode"].episode,
+                        frame_time=m.get("timestamp", 0.0),
+                        file_path=file_path,
+                        confirmation_type="manual",
+                        score=m.get("score", 1.0),
+                        ocr_text=m.get("ocr_text", ""),
+                        file_duration=self.file_info.get(file_path, {}).get("duration"),
+                    )
+                except Exception:
+                    pass
+
             self._bump()
             return {"success": True}
 
@@ -556,6 +668,27 @@ class MatchingPipeline:
                     new_score = token_similarity(m["episode"].title, m["ocr_text"])
                     m["score"] = round(new_score, 2)
                 m["confirmed"] = True
+
+            # Save manual frame selection to database
+            if self.matches.get(file_path) and self.matches[file_path].get("episode"):
+                ep = self.matches[file_path]["episode"]
+                try:
+                    save_title_card_record(
+                        series_name=self.series_name,
+                        series_year=self.series_year,
+                        episode_code=ep.code,
+                        episode_title=ep.title,
+                        season_number=ep.season,
+                        episode_number=ep.episode,
+                        frame_time=frame["timestamp"],
+                        file_path=file_path,
+                        confirmation_type="manual",
+                        score=self.matches[file_path].get("score", 1.0),
+                        ocr_text=self.matches[file_path].get("ocr_text", ""),
+                        file_duration=self.file_info.get(file_path, {}).get("duration"),
+                    )
+                except Exception:
+                    pass
 
             self._bump()
             return {
@@ -956,6 +1089,28 @@ class MatchingPipeline:
                                                     self.series_name, self.series_year)
 
             manifest = execute_staged_rename(moves, self.series_dir, self.log_dir)
+
+            # Save all confirmed matches and title card timestamps to database for future runs
+            for orig_fp, m in planned:
+                if m.get("episode"):
+                    try:
+                        conf_type = "manual" if (m.get("manual") or m.get("confirmed")) else "auto"
+                        save_title_card_record(
+                            series_name=self.series_name,
+                            series_year=self.series_year,
+                            episode_code=m["episode"].code,
+                            episode_title=m["episode"].title,
+                            season_number=m["episode"].season,
+                            episode_number=m["episode"].episode,
+                            frame_time=m.get("timestamp", 0.0),
+                            file_path=orig_fp,
+                            confirmation_type=conf_type,
+                            score=m.get("score", 1.0),
+                            ocr_text=m.get("ocr_text", ""),
+                            file_duration=self.file_info.get(orig_fp, {}).get("duration"),
+                        )
+                    except Exception:
+                        pass
 
             with self._lock:
                 self._remap_paths(dict(moves))

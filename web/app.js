@@ -450,6 +450,237 @@ function updateUI(data) {
   }
 }
 
+function escapeHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function createSearchableEpisodeDropdown(item, availableEpisodes, onSelect) {
+  const container = document.createElement("div");
+  container.className = "combobox-container";
+
+  const inputWrapper = document.createElement("div");
+  inputWrapper.className = "combobox-input-wrapper";
+
+  const searchIcon = document.createElement("span");
+  searchIcon.className = "combobox-icon";
+  searchIcon.textContent = "🔍";
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "combobox-input";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+
+  let currentTitle = "";
+  if (item.status === "skipped") {
+    currentTitle = "-- Exclude / Skip File --";
+  } else if (item.episode_code) {
+    const matchedEp = (availableEpisodes || []).find(e => e.code === item.episode_code);
+    currentTitle = matchedEp ? `${matchedEp.code} - ${matchedEp.title}` : `${item.episode_code} - ${item.episode_title}`;
+  }
+  input.value = currentTitle;
+  input.placeholder = "Search or select episode...";
+  input.title = currentTitle || "Search or select episode";
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.className = "combobox-toggle-btn";
+  toggleBtn.innerHTML = "▾";
+  toggleBtn.tabIndex = -1;
+
+  inputWrapper.appendChild(searchIcon);
+  inputWrapper.appendChild(input);
+  inputWrapper.appendChild(toggleBtn);
+  container.appendChild(inputWrapper);
+
+  const menu = document.createElement("div");
+  menu.className = "combobox-menu";
+  menu.style.display = "none";
+
+  const actionsWrap = document.createElement("div");
+  actionsWrap.className = "combobox-actions";
+
+  const optSkip = document.createElement("div");
+  optSkip.className = "combobox-item combobox-item-action text-danger";
+  optSkip.innerHTML = `<span class="combobox-badge-action">🚫</span> Exclude / Skip File`;
+  optSkip.onmousedown = (e) => {
+    e.preventDefault();
+    selectOption("__skip__", "-- Exclude / Skip File --");
+  };
+  actionsWrap.appendChild(optSkip);
+
+  const optClear = document.createElement("div");
+  optClear.className = "combobox-item combobox-item-action";
+  optClear.innerHTML = `<span class="combobox-badge-action">🔄</span> Unassign Episode`;
+  optClear.onmousedown = (e) => {
+    e.preventDefault();
+    selectOption("", "");
+  };
+  actionsWrap.appendChild(optClear);
+  menu.appendChild(actionsWrap);
+
+  const listContainer = document.createElement("div");
+  listContainer.className = "combobox-list";
+  menu.appendChild(listContainer);
+
+  const emptyMsg = document.createElement("div");
+  emptyMsg.className = "combobox-empty";
+  emptyMsg.textContent = "No matching episodes found";
+  emptyMsg.style.display = "none";
+  menu.appendChild(emptyMsg);
+
+  container.appendChild(menu);
+
+  let activeIndex = -1;
+
+  function renderList(query = "") {
+    listContainer.innerHTML = "";
+    const q = query.trim().toLowerCase();
+    const visibleItems = [];
+
+    (availableEpisodes || []).forEach(ep => {
+      const codeMatch = ep.code.toLowerCase().includes(q);
+      const titleMatch = ep.title.toLowerCase().includes(q);
+      if (!q || codeMatch || titleMatch) {
+        visibleItems.push(ep);
+        const itemEl = document.createElement("div");
+        const isCurrent = ep.code === item.episode_code && item.status !== "skipped";
+        itemEl.className = `combobox-item ${isCurrent ? "is-selected" : ""}`;
+        itemEl.innerHTML = `
+          <span class="combobox-code">${escapeHtml(ep.code)}</span>
+          <span class="combobox-title">${escapeHtml(ep.title)}</span>
+        `;
+        itemEl.onmousedown = (e) => {
+          e.preventDefault();
+          selectOption(ep.code, `${ep.code} - ${ep.title}`);
+        };
+        listContainer.appendChild(itemEl);
+      }
+    });
+
+    if (visibleItems.length === 0) {
+      emptyMsg.style.display = "block";
+    } else {
+      emptyMsg.style.display = "none";
+    }
+  }
+
+  function selectOption(val, displayText) {
+    input.value = displayText;
+    input.title = displayText;
+    currentTitle = displayText;
+    closeMenu();
+    if (val !== item.episode_code || (val === "__skip__" && item.status !== "skipped")) {
+      onSelect(val);
+    }
+  }
+
+  function openMenu() {
+    document.querySelectorAll(".combobox-menu").forEach(m => {
+      if (m !== menu) m.style.display = "none";
+    });
+    document.querySelectorAll(".result-card").forEach(c => c.classList.remove("dropdown-open"));
+
+    renderList(input.value === currentTitle ? "" : input.value);
+    menu.style.display = "flex";
+    const cardEl = container.closest(".result-card");
+    if (cardEl) cardEl.classList.add("dropdown-open");
+  }
+
+  function closeMenu() {
+    menu.style.display = "none";
+    const cardEl = container.closest(".result-card");
+    if (cardEl) cardEl.classList.remove("dropdown-open");
+    activeIndex = -1;
+  }
+
+  input.onfocus = () => {
+    input.select();
+    openMenu();
+  };
+
+  input.onclick = (e) => {
+    e.stopPropagation();
+    if (menu.style.display === "none") {
+      openMenu();
+    }
+  };
+
+  input.oninput = () => {
+    if (menu.style.display === "none") {
+      openMenu();
+    }
+    renderList(input.value);
+  };
+
+  toggleBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (menu.style.display === "none") {
+      input.focus();
+    } else {
+      closeMenu();
+    }
+  };
+
+  input.onblur = () => {
+    setTimeout(() => {
+      closeMenu();
+      input.value = currentTitle;
+    }, 180);
+  };
+
+  input.onkeydown = (e) => {
+    if (menu.style.display === "none") {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        openMenu();
+        e.preventDefault();
+        return;
+      }
+    }
+    const items = listContainer.querySelectorAll(".combobox-item");
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (items.length > 0) {
+        activeIndex = (activeIndex + 1) % items.length;
+        highlightItem(items, activeIndex);
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (items.length > 0) {
+        activeIndex = (activeIndex - 1 + items.length) % items.length;
+        highlightItem(items, activeIndex);
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIndex >= 0 && items[activeIndex]) {
+        items[activeIndex].dispatchEvent(new MouseEvent("mousedown"));
+      } else if (items.length > 0) {
+        items[0].dispatchEvent(new MouseEvent("mousedown"));
+      }
+    } else if (e.key === "Escape") {
+      closeMenu();
+      input.value = currentTitle;
+    }
+  };
+
+  function highlightItem(items, idx) {
+    items.forEach((it, i) => {
+      it.classList.toggle("is-active", i === idx);
+      if (i === idx) {
+        it.scrollIntoView({ block: "nearest" });
+      }
+    });
+  }
+
+  return container;
+}
+
 function renderCards(matches, availableEpisodes, reviewThreshold) {
   const grid = document.getElementById("results-grid");
   grid.innerHTML = "";
@@ -459,6 +690,7 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     // Filter logic
     if (filter === "ready" && item.needs_review) return;
     if (filter === "review" && !item.needs_review) return;
+    if (filter === "raw_disc" && !item.is_raw_disc) return;
     if (filter === "overridden" && !item.is_overridden) return;
     if (filter === "skipped" && item.status !== "skipped") return;
 
@@ -548,10 +780,24 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     origFn.textContent = item.file_name;
     content.appendChild(origFn);
 
-    // Media Info Badges (Resolution, Codec, HDR/DV, Audio)
+    // Media Info Badges (Resolution, Codec, HDR/DV, Audio, Raw Disc Rip, DB Match)
+    const mb = document.createElement("div");
+    mb.className = "media-badges";
+    if (item.is_raw_disc) {
+      const p = document.createElement("span");
+      p.className = "media-pill raw-disc";
+      p.textContent = `📀 Raw Disc (${item.raw_disc_tag || "rip"})`;
+      p.title = "Raw optical disc rip pattern detected (e.g. MakeMKV _t00)";
+      mb.appendChild(p);
+    }
+    if (item.db_matched) {
+      const p = document.createElement("span");
+      p.className = "media-pill db-match";
+      p.textContent = "💾 DB Matched";
+      p.title = "Recognized from previously confirmed title card database";
+      mb.appendChild(p);
+    }
     if (item.media_info) {
-      const mb = document.createElement("div");
-      mb.className = "media-badges";
       if (item.media_info.resolution) {
         const p = document.createElement("span");
         p.className = "media-pill res";
@@ -581,6 +827,8 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
         p.textContent = item.media_info.audio_title;
         mb.appendChild(p);
       }
+    }
+    if (mb.children.length > 0) {
       content.appendChild(mb);
     }
 
@@ -598,7 +846,13 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     if (item.score >= 0.8) scoreClass = "high";
     else if (item.score >= 0.5) scoreClass = "mid";
     scorePill.className = `score-pill ${scoreClass}`;
-    scorePill.textContent = item.is_overridden ? (item.status === "skipped" ? "Excluded" : "Manual") : `${Math.round(item.score * 100)}%`;
+    if (item.status === "skipped") {
+      scorePill.textContent = "Excluded";
+    } else if (item.is_overridden || item.confirmation_type === "manual") {
+      scorePill.textContent = "✓ Manual";
+    } else {
+      scorePill.textContent = `Auto ${Math.round(item.score * 100)}%`;
+    }
     matchRow.appendChild(scorePill);
 
     content.appendChild(matchRow);
@@ -641,47 +895,25 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
       content.appendChild(warnBox);
     }
 
-    // Override & Confirm Row
+    // Override & Confirm Row (Searchable Episode Combobox)
     const overrideRow = document.createElement("div");
     overrideRow.className = "override-row";
 
-    const select = document.createElement("select");
-    select.className = "override-select";
-
-    const defaultOpt = document.createElement("option");
-    defaultOpt.value = "";
-    defaultOpt.textContent = "-- Reassign Episode --";
-    select.appendChild(defaultOpt);
-
-    const skipOpt = document.createElement("option");
-    skipOpt.value = "__skip__";
-    skipOpt.textContent = "-- Exclude / Skip File --";
-    if (item.status === "skipped") skipOpt.selected = true;
-    select.appendChild(skipOpt);
-
-    (availableEpisodes || []).forEach(ep => {
-      const opt = document.createElement("option");
-      opt.value = ep.code;
-      opt.textContent = `${ep.code} - ${ep.title}`;
-      if (ep.code === item.episode_code && item.status !== "skipped") {
-        opt.selected = true;
-      }
-      select.appendChild(opt);
+    const combobox = createSearchableEpisodeDropdown(item, availableEpisodes, (val) => {
+      applyOverride(item.file_path, val);
     });
-
-    select.onchange = (e) => applyOverride(item.file_path, e.target.value);
 
     const actionFlex = document.createElement("div");
     actionFlex.style.display = "flex";
     actionFlex.style.gap = "8px";
     actionFlex.style.alignItems = "center";
-    actionFlex.appendChild(select);
+    actionFlex.appendChild(combobox);
 
     if (item.needs_review) {
       const confirmBtn = document.createElement("button");
       confirmBtn.className = "btn-confirm";
       confirmBtn.textContent = "✓ Confirm";
-      confirmBtn.title = "Approve this match for reorganization";
+      confirmBtn.title = "Approve this match and log title card timestamp to database";
       confirmBtn.onclick = () => confirmMatch(item.file_path);
       actionFlex.appendChild(confirmBtn);
     }

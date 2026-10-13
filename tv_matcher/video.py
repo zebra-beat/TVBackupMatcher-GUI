@@ -90,10 +90,12 @@ def parse_timestamp_str(val) -> float:
 
 
 def build_candidate_timestamps(info: VideoInfo, frame_windows: str = DEFAULT_FRAME_WINDOWS,
-                               use_chapters: bool = True, max_frames: int = 80) -> List[float]:
+                              use_chapters: bool = True, max_frames: int = 80,
+                              extra_timestamps: Optional[List[float]] = None) -> List[float]:
     """
-    Ordered list of timestamps to sample. Chapter-derived points come first because
-    title cards usually follow the opening-titles chapter; then the fixed windows.
+    Ordered list of timestamps to sample.
+    Prior title card timestamps from the database and chapter-derived points come first because
+    title cards usually follow the opening-titles chapter or established series pattern; then the fixed windows.
     """
     ordered: List[float] = []
     seen = set()
@@ -107,6 +109,15 @@ def build_candidate_timestamps(info: VideoInfo, frame_windows: str = DEFAULT_FRA
             seen.add(key)
             ordered.append(t)
 
+    # 1. Prior title card timestamps from database (if any)
+    if extra_timestamps:
+        for et in extra_timestamps:
+            try:
+                add(float(et))
+            except (TypeError, ValueError):
+                pass
+
+    # 2. Chapter-derived points
     if use_chapters:
         for c in info.chapters[:3]:
             try:
@@ -117,6 +128,7 @@ def build_candidate_timestamps(info: VideoInfo, frame_windows: str = DEFAULT_FRA
                 for dt in CHAPTER_OFFSETS:
                     add(end_t + dt)
 
+    # 3. Fixed configured windows
     for start, end, step in parse_frame_windows(frame_windows):
         t = start
         while t <= end + 1e-6:

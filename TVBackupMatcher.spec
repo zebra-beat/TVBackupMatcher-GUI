@@ -16,6 +16,7 @@ binaries = []
 hiddenimports = [
     'tv_matcher',
     'tv_matcher.config',
+    'tv_matcher.database',
     'tv_matcher.dovi',
     'tv_matcher.matcher',
     'tv_matcher.media_tags',
@@ -27,6 +28,7 @@ hiddenimports = [
     'tv_matcher.video',
     'server',
     'server.api_server',
+    'sqlite3',
 ]
 
 a = Analysis(
