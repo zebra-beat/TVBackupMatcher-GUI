@@ -10,6 +10,19 @@ import subprocess
 import sys
 
 
+# Ensure UTF-8 output encoding across Windows, macOS, and Linux
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Build standalone TVBackupMatcher executable.")
     parser.add_argument(
@@ -32,7 +45,7 @@ def main():
     os.chdir(repo_root)
 
     print("=" * 65)
-    print("      🔨 TVBackupMatcher - Standalone Executable Builder 📦      ")
+    print("      [+] TVBackupMatcher - Standalone Executable Builder      ")
     print("=" * 65)
     print(f"[*] Workspace Root: {repo_root}")
     print(f"[*] Python: {sys.version.split()[0]} ({sys.executable})")
@@ -96,16 +109,16 @@ def main():
 
     size_mb = os.path.getsize(output_bin) / (1024 * 1024)
     print("\n" + "=" * 65)
-    print("                  ✨ BUILD SUCCEEDED! ✨                  ")
+    print("                  [OK] BUILD SUCCEEDED!                  ")
     print("=" * 65)
-    print(f"[✓] Standalone Binary : {output_bin}")
-    print(f"[✓] Binary Size       : {size_mb:.2f} MB")
+    print(f"[OK] Standalone Binary : {output_bin}")
+    print(f"[OK] Binary Size       : {size_mb:.2f} MB")
 
     # Smoke test the built binary
     print("\n[*] Smoke testing compiled binary (--version)...")
     try:
         smoke = subprocess.run([output_bin, "--version"], capture_output=True, text=True, timeout=10)
-        print(f"[✓] Output: {smoke.stdout.strip() or smoke.stderr.strip()}")
+        print(f"[OK] Output: {smoke.stdout.strip() or smoke.stderr.strip()}")
     except Exception as e:
         print(f"[!] Smoke test warning: {e}", file=sys.stderr)
 

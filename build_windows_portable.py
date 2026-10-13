@@ -12,6 +12,18 @@ import subprocess
 import sys
 import zipfile
 
+# Ensure UTF-8 output encoding across Windows, macOS, and Linux
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(REPO_ROOT, "dist")
 PORTABLE_DIR = os.path.join(DIST_DIR, "TVBackupMatcher-Portable")
@@ -22,7 +34,7 @@ def log(msg: str):
 
 
 def log_success(msg: str):
-    print(f"[✓] {msg}")
+    print(f"[OK] {msg}")
 
 
 def log_warn(msg: str):
@@ -38,7 +50,10 @@ def ensure_windows_binary() -> str:
         if os.path.isfile(alt_path):
             return alt_path
         log("Binary not found. Running build_bundle.py...")
-        subprocess.check_call([sys.executable, os.path.join(REPO_ROOT, "build_bundle.py")])
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        subprocess.check_call([sys.executable, os.path.join(REPO_ROOT, "build_bundle.py")], env=env)
 
     if not os.path.isfile(bin_path):
         alt = os.path.join(DIST_DIR, "tvbackupmatcher")
@@ -117,10 +132,10 @@ Project & Updates:
     size_exe_mb = os.path.getsize(portable_exe) / (1024 * 1024)
     size_zip_mb = os.path.getsize(zip_path) / (1024 * 1024)
     print("\n" + "=" * 65)
-    print("           ✨ WINDOWS PORTABLE BUILD SUCCEEDED! ✨           ")
+    print("           [OK] WINDOWS PORTABLE BUILD SUCCEEDED!           ")
     print("=" * 65)
-    print(f"[✓] Portable EXE : {portable_exe} ({size_exe_mb:.2f} MB)")
-    print(f"[✓] Portable ZIP : {zip_path} ({size_zip_mb:.2f} MB)")
+    print(f"[OK] Portable EXE : {portable_exe} ({size_exe_mb:.2f} MB)")
+    print(f"[OK] Portable ZIP : {zip_path} ({size_zip_mb:.2f} MB)")
     print("=" * 65 + "\n")
     return portable_exe, zip_path
 

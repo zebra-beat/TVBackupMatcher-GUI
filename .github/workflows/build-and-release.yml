@@ -19,6 +19,10 @@ on:
         type: boolean
         default: false
 
+env:
+  PYTHONIOENCODING: utf-8
+  PYTHONUTF8: '1'
+
 jobs:
   test:
     name: Run Unit Tests & Lint
@@ -190,6 +194,9 @@ jobs:
     name: Build Windows Portable Executable (x86_64)
     needs: test
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

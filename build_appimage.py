@@ -12,6 +12,18 @@ import subprocess
 import sys
 import urllib.request
 
+# Ensure UTF-8 output encoding across Windows, macOS, and Linux
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DIST_DIR = os.path.join(REPO_ROOT, "dist")
 BUILD_DIR = os.path.join(REPO_ROOT, "build")
@@ -31,7 +43,7 @@ def log(msg: str):
 
 
 def log_success(msg: str):
-    print(f"[✓] {msg}")
+    print(f"[OK] {msg}")
 
 
 def log_warn(msg: str):
@@ -52,7 +64,10 @@ def ensure_binary():
     bin_path = os.path.join(DIST_DIR, "tvbackupmatcher")
     if not os.path.isfile(bin_path):
         log("Standalone binary not found. Running build_bundle.py...")
-        subprocess.check_call([sys.executable, os.path.join(REPO_ROOT, "build_bundle.py")])
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
+        subprocess.check_call([sys.executable, os.path.join(REPO_ROOT, "build_bundle.py")], env=env)
     if not os.path.isfile(bin_path):
         raise FileNotFoundError(f"Expected compiled binary at {bin_path}")
     return bin_path
@@ -181,11 +196,11 @@ def build_appimage(output_name: str = None) -> str:
 
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print("\n" + "=" * 65)
-    print("               ✨ APPIMAGE BUILD SUCCEEDED! ✨               ")
+    print("               [OK] APPIMAGE BUILD SUCCEEDED!               ")
     print("=" * 65)
-    print(f"[✓] Linux AppImage : {output_path}")
-    print(f"[✓] AppImage Size  : {size_mb:.2f} MB")
-    print(f"[✓] Architecture   : {arch}")
+    print(f"[OK] Linux AppImage : {output_path}")
+    print(f"[OK] AppImage Size  : {size_mb:.2f} MB")
+    print(f"[OK] Architecture   : {arch}")
     print("=" * 65 + "\n")
     return output_path
 
