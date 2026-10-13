@@ -57,15 +57,35 @@ def find_system_binary(name):
 def get_macho_dependencies(binary_path):
     """Parses otool -L output to find non-system dylib dependencies."""
     res = subprocess.run(["otool", "-L", binary_path], capture_output=True, text=True)
+    rpath_res = subprocess.run(["otool", "-l", binary_path], capture_output=True, text=True)
+    binary_rpaths = []
+    for line in rpath_res.stdout.splitlines():
+        m_rpath = re.search(r"path\s+([^\s]+)\s+\(offset", line)
+        if m_rpath:
+            rp = m_rpath.group(1)
+            if "@loader_path" in rp:
+                rp = rp.replace("@loader_path", os.path.dirname(binary_path))
+            elif "@executable_path" in rp:
+                rp = rp.replace("@executable_path", os.path.dirname(binary_path))
+            binary_rpaths.append(os.path.normpath(rp))
+
     deps = []
     for line in res.stdout.splitlines()[1:]:
         m = re.match(r"\s+([^\s]+)", line)
         if m:
             dep = m.group(1)
-            # Filter out macOS system frameworks and libraries
-            if (dep.startswith("/opt/homebrew") or dep.startswith("/usr/local")
+            if dep.startswith("@rpath/") or dep.startswith("@loader_path/"):
+                fname = os.path.basename(dep)
+                candidate_dirs = binary_rpaths + [os.path.dirname(binary_path), "/opt/homebrew/lib", "/usr/local/lib"]
+                for cdir in candidate_dirs:
+                    candidate = os.path.join(cdir, fname)
+                    if os.path.exists(candidate):
+                        deps.append((dep, os.path.realpath(candidate)))
+                        break
+            elif (dep.startswith("/opt/homebrew") or dep.startswith("/usr/local")
                     or (dep.startswith("/") and not dep.startswith("/System") and not dep.startswith("/usr/lib"))):
-                deps.append(dep)
+                if os.path.exists(dep):
+                    deps.append((dep, os.path.realpath(dep)))
     return deps
 
 
@@ -80,10 +100,14 @@ def bundle_macos_app():
 
     # 1. Build PyInstaller .app bundle
     log("Building TVBackupMatcher.app with PyInstaller...")
-    if shutil.which("pyinstaller"):
-        pyinstaller_cmd = ["pyinstaller", "--clean", "--noconfirm", "TVBackupMatcher.spec"]
+    os.environ["PYINSTALLER_CONFIG_DIR"] = os.path.join(REPO_ROOT, ".pyinstaller_cache")
+    pyinstaller_bin = os.path.join(REPO_ROOT, ".venv", "bin", "pyinstaller")
+    if os.path.isfile(pyinstaller_bin):
+        pyinstaller_cmd = [pyinstaller_bin, "--noconfirm", "TVBackupMatcher.spec"]
+    elif shutil.which("pyinstaller"):
+        pyinstaller_cmd = ["pyinstaller", "--noconfirm", "TVBackupMatcher.spec"]
     else:
-        pyinstaller_cmd = [sys.executable, "-m", "PyInstaller", "--clean", "--noconfirm", "TVBackupMatcher.spec"]
+        pyinstaller_cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "TVBackupMatcher.spec"]
     
     subprocess.check_call(pyinstaller_cmd, cwd=REPO_ROOT)
     if not os.path.isdir(APP_PATH):
@@ -138,6 +162,8 @@ def bundle_macos_app():
     # 5. Recursive dylib discovery & copying
     log("Discovering dependent dynamic libraries (.dylib)...")
     all_dylibs = {}  # realpath -> filename
+    alias_map = {}   # alias_fname -> real_fname
+    load_path_map = {}  # dep_str -> target_fname
     to_scan = [b for b in copied_binaries if not b.endswith(".py")]
     visited = set()
 
@@ -148,30 +174,39 @@ def bundle_macos_app():
             continue
         visited.add(real_curr)
 
-        for dep in get_macho_dependencies(real_curr):
-            real_dep = os.path.realpath(dep)
+        for dep_str, real_dep in get_macho_dependencies(real_curr):
             if os.path.isfile(real_dep):
-                fname = os.path.basename(real_dep)
-                if real_dep not in all_dylibs:
-                    all_dylibs[real_dep] = fname
-                    if real_dep not in visited:
-                        to_scan.append(real_dep)
-                if dep not in all_dylibs:
-                    all_dylibs[dep] = fname
+                real_fname = os.path.basename(real_dep)
+                dep_fname = os.path.basename(dep_str)
+                all_dylibs[real_dep] = real_fname
+                load_path_map[dep_str] = dep_fname
+                load_path_map[real_dep] = real_fname
+                if dep_fname != real_fname:
+                    alias_map[dep_fname] = real_fname
+                if real_dep not in visited:
+                    to_scan.append(real_dep)
 
     log(f"Discovered {len(all_dylibs)} external dylibs to bundle into Frameworks/")
 
     # Copy all unique dylibs to Frameworks/
     copied_dst = set()
-    for src_path, fname in all_dylibs.items():
+    for real_src, fname in all_dylibs.items():
         if fname in copied_dst:
             continue
-        real_src = os.path.realpath(src_path)
         if os.path.isfile(real_src):
             dst_path = os.path.join(FRAMEWORKS_DIR, fname)
             shutil.copy2(real_src, dst_path)
             os.chmod(dst_path, 0o755)
             copied_dst.add(fname)
+
+    # Create alias symlinks in Frameworks/ (e.g. libwebp.7.dylib -> libwebp.7.2.0.dylib)
+    for alias_fname, target_fname in alias_map.items():
+        alias_path = os.path.join(FRAMEWORKS_DIR, alias_fname)
+        if not os.path.exists(alias_path):
+            try:
+                os.symlink(target_fname, alias_path)
+            except OSError:
+                pass
 
     # 6. Relink Mach-O dependencies using install_name_tool
     log("Relinking Mach-O load paths for bundled dylibs and binaries...")
@@ -180,21 +215,22 @@ def bundle_macos_app():
         if not fname.endswith(".dylib") and not ".dylib." in fname:
             continue
         dylib_path = os.path.join(FRAMEWORKS_DIR, fname)
-        # Update dylib ID
+        if os.path.islink(dylib_path):
+            continue
+        # Update dylib ID and add @loader_path to rpath
         subprocess.run(["install_name_tool", "-id", f"@rpath/{fname}", dylib_path], check=False)
+        subprocess.run(["install_name_tool", "-add_rpath", "@loader_path", dylib_path], check=False)
         # Update references to other dylibs
-        for src_path, dep_fname in all_dylibs.items():
-            subprocess.run(["install_name_tool", "-change", src_path, f"@loader_path/{dep_fname}", dylib_path], check=False)
+        for src_str, dep_fname in load_path_map.items():
+            subprocess.run(["install_name_tool", "-change", src_str, f"@rpath/{dep_fname}", dylib_path], check=False)
 
     # Second: binaries inside MacOS/bin/
     for bin_path in copied_binaries:
         if bin_path.endswith(".py"):
             continue
-        # Add Frameworks to rpath
         subprocess.run(["install_name_tool", "-add_rpath", "@executable_path/../../Frameworks", bin_path], check=False)
-        # Change load paths to Frameworks/
-        for src_path, dep_fname in all_dylibs.items():
-            subprocess.run(["install_name_tool", "-change", src_path, f"@executable_path/../../Frameworks/{dep_fname}", bin_path], check=False)
+        for src_str, dep_fname in load_path_map.items():
+            subprocess.run(["install_name_tool", "-change", src_str, f"@executable_path/../../Frameworks/{dep_fname}", bin_path], check=False)
 
     # 7. Ad-hoc codesign all binaries and frameworks
     log("Ad-hoc codesigning bundled frameworks and binaries...")
@@ -254,27 +290,27 @@ def bundle_macos_app():
     if os.path.isfile(DMG_PATH):
         os.remove(DMG_PATH)
 
-    # Try diskutil image create from, then fallback to hdiutil create
+    # Try hdiutil create, then diskutil image create fallback
     dmg_created = False
     try:
-        cmd = ["diskutil", "image", "create", "from", "--volumeName", "TVBackupMatcher", "--format", "UDZO", staging_dir, DMG_PATH]
-        log(f"Running: {' '.join(cmd)}")
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode == 0 and os.path.isfile(DMG_PATH):
-            dmg_created = True
-        else:
-            log_warn(f"diskutil image create message: {res.stderr or res.stdout}")
+        cmd = ["hdiutil", "create", "-srcfolder", staging_dir, "-volname", "TVBackupMatcher", "-ov", "-format", "UDZO", DMG_PATH]
+        log(f"Running hdiutil: {' '.join(cmd)}")
+        subprocess.check_call(cmd)
+        dmg_created = True
     except Exception as e:
-        log_warn(f"diskutil image create failed: {e}")
+        log_warn(f"hdiutil create failed: {e}")
 
     if not dmg_created:
         try:
-            cmd = ["hdiutil", "create", "-srcfolder", staging_dir, "-volname", "TVBackupMatcher", "-ov", "-format", "UDZO", DMG_PATH]
-            log(f"Falling back to hdiutil: {' '.join(cmd)}")
-            subprocess.check_call(cmd)
-            dmg_created = True
+            cmd = ["diskutil", "image", "create", "from", "--volumeName", "TVBackupMatcher", "--format", "UDZO", staging_dir, DMG_PATH]
+            log(f"Falling back to diskutil: {' '.join(cmd)}")
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode == 0 and os.path.isfile(DMG_PATH):
+                dmg_created = True
+            else:
+                log_warn(f"diskutil image create message: {res.stderr or res.stdout}")
         except Exception as e:
-            log_warn(f"hdiutil create failed: {e}")
+            log_warn(f"diskutil image create failed: {e}")
 
     # Clean up staging directory
     app_link = os.path.join(staging_dir, "Applications")
