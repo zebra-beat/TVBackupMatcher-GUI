@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import threading
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
@@ -12,7 +13,16 @@ from .metadata import EpisodeInfo, resolve_show_metadata
 from .naming import build_target_relpath, parse_series_folder
 from .ocr import run_ocr, has_credit_keywords
 from .renamer import RenameError, execute_staged_rename, export_title_cards, find_undoable_log, undo_rename
-from .video import DEFAULT_FRAME_WINDOWS, build_candidate_timestamps, extract_frame, parse_frame_windows, probe_video, parse_timestamp_str
+from .video import (
+    DEFAULT_FRAME_WINDOWS,
+    build_candidate_timestamps,
+    extract_frame,
+    extract_preview_strip,
+    generate_video_preview,
+    parse_frame_windows,
+    parse_timestamp_str,
+    probe_video,
+)
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".ts", ".avi", ".m2ts", ".mov"}
 SKIP = "__skip__"            # override value: leave this file untouched
@@ -78,6 +88,7 @@ class MatchingPipeline:
         # file_path -> {episode, score, timestamp, ocr_text, image_path, confirmed, manual}
         self.matches: Dict[str, dict] = {}
         self.overrides: Dict[str, str] = {}  # file_path -> episode_code or SKIP
+        self.unmatched_active_frames: Dict[str, str] = {}  # file_path -> active thumbnail image path
         self.version = 0                     # bumps whenever results change (lets UIs skip re-renders)
 
         self.scan_dir = ""
@@ -118,7 +129,7 @@ class MatchingPipeline:
             }
             for fp in self.files:
                 m = self.matches.get(fp)
-                active_img = m.get("image_path") if m else ""
+                active_img = m.get("image_path") if m else self.unmatched_active_frames.get(fp, "")
                 stored_frames = self.file_frames.get(fp, [])
                 available_frames = [
                     {
@@ -187,12 +198,15 @@ class MatchingPipeline:
                 else:
                     skipped = self.overrides.get(fp) == SKIP
                     counts["skipped" if skipped else "unmatched"] += 1
-                    fallback_img = available_frames[0]["image_path"] if available_frames else ""
-                    fallback_t = available_frames[0]["timestamp"] if available_frames else 0.0
+                    fallback_img = (self.unmatched_active_frames.get(fp)
+                                    or (available_frames[0]["image_path"] if available_frames else ""))
+                    active_item = next((f for f in available_frames if f["image_path"] == fallback_img), None)
+                    fallback_t = active_item["timestamp"] if active_item else (available_frames[0]["timestamp"] if available_frames else 0.0)
                     items.append({**base,
                         "episode_code": "", "episode_title": "Skipped" if skipped else "Unmatched",
                         "season": 0, "episode_num": 0, "score": 0.0, "timestamp": fallback_t,
-                        "ocr_sample": "", "has_thumbnail": bool(fallback_img and os.path.exists(fallback_img)), "image_path": fallback_img,
+                        "ocr_sample": active_item.get("ocr_sample", "") if active_item else "",
+                        "has_thumbnail": bool(fallback_img and os.path.exists(fallback_img)), "image_path": fallback_img,
                         "is_overridden": skipped, "confirmed": False, "needs_review": False,
                         "has_credits": False, "warning": "", "target_relpath": "", "already_named": False,
                         "status": "skipped" if skipped else "unmatched",
@@ -525,7 +539,15 @@ class MatchingPipeline:
                         "manual": False,
                     }
                 else:
-                    return {"success": False, "error": "File is not currently matched to an episode. Select an episode first."}
+                    self.unmatched_active_frames[file_path] = frame["image_path"]
+                    self._bump()
+                    return {
+                        "success": True,
+                        "timestamp": frame["timestamp"],
+                        "image_path": frame["image_path"],
+                        "score": frame.get("score", 0.0),
+                        "ocr_text": frame.get("ocr_text", ""),
+                    }
             else:
                 m["timestamp"] = frame["timestamp"]
                 m["image_path"] = frame["image_path"]
@@ -617,9 +639,79 @@ class MatchingPipeline:
                     "confirmed": True,
                     "manual": False,
                 }
+            else:
+                self.unmatched_active_frames[file_path] = img_path
 
             self._bump()
             return {"success": True, "frame": new_frame, "match": self.matches.get(file_path)}
+
+    def generate_scrub_preview(self, file_path: str, start_time=50.0, duration=20.0) -> dict:
+        """
+        Generates an ultrafast 640px H.264 scrubable MP4 preview clip and a 10-frame keyframe filmstrip
+        across [start_time, start_time + duration] for manual title card identification and scrubbing.
+        """
+        with self._lock:
+            if file_path not in self.files and not os.path.isfile(file_path):
+                return {"success": False, "error": f"Media file not found: {file_path}"}
+
+        try:
+            start_s = parse_timestamp_str(start_time)
+        except Exception:
+            start_s = 50.0
+
+        try:
+            dur_s = float(duration)
+            dur_s = max(5.0, min(dur_s, 120.0))
+        except Exception:
+            dur_s = 20.0
+
+        import hashlib
+        h = hashlib.md5(f"{file_path}_{round(start_s, 1)}_{round(dur_s, 1)}".encode("utf-8")).hexdigest()[:8]
+        scrub_dir = os.path.join(self.temp_dir, "scrub_previews")
+        os.makedirs(scrub_dir, exist_ok=True)
+
+        mp4_path = os.path.join(scrub_dir, f"prev_{h}.mp4")
+        ok_video = generate_video_preview(file_path, start_s, dur_s, mp4_path)
+
+        strip_frames = extract_preview_strip(
+            file_path, start_s, dur_s, count=10, output_dir=scrub_dir, prefix=f"strip_{h}"
+        )
+
+        keyframes = [
+            {
+                "timestamp": f["timestamp"],
+                "image_path": f["image_path"],
+                "thumbnail_url": f"/api/thumbnail?path={urllib.parse.quote(f['image_path'])}"
+            }
+            for f in strip_frames
+        ]
+
+        total_dur = 0.0
+        chapters = []
+        try:
+            p_info = probe_video(file_path)
+            total_dur = p_info.duration
+            for idx, c in enumerate(p_info.chapters):
+                st_chap = float(c.get("start_time", 0.0) or 0.0)
+                title = c.get("tags", {}).get("title") or f"Chapter {idx + 1}"
+                chapters.append({"start": round(st_chap, 1), "title": title})
+        except Exception:
+            info = self.file_info.get(file_path)
+            if isinstance(info, dict):
+                total_dur = info.get("duration", 0.0)
+
+        return {
+            "success": True,
+            "file_path": file_path,
+            "file_name": os.path.basename(file_path),
+            "start_time": round(start_s, 2),
+            "duration": round(dur_s, 2),
+            "video_duration": round(total_dur, 1),
+            "has_video": ok_video,
+            "video_url": f"/api/video_preview?path={urllib.parse.quote(mp4_path)}" if ok_video else "",
+            "keyframes": keyframes,
+            "chapters": chapters,
+        }
 
     def rescan_single_file(self, file_path: str, frame_windows: str = "",
                           min_score: Optional[float] = None, use_chapters: Optional[bool] = None) -> dict:

@@ -109,6 +109,18 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404, "Image not found")
             return
 
+        if path == "/api/video_preview":
+            params = urllib.parse.parse_qs(parsed.query)
+            vid_path = params.get("path", [""])[0]
+            ext = os.path.splitext(vid_path)[1].lower()
+            # Only scrub preview mp4 files inside temp folder may be streamed.
+            if (vid_path and ext == ".mp4" and _is_within(vid_path, self.pipeline.temp_dir)
+                    and os.path.isfile(vid_path)):
+                self.send_video(vid_path)
+                return
+            self.send_error(404, "Video preview not found")
+            return
+
         # Static assets from web/ (path traversal safe)
         file_name = "index.html" if path == "/" else path.lstrip("/")
         file_path = os.path.join(self.web_dir, file_name)
@@ -256,6 +268,15 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
                 auto_convert = bool(data.get("auto_convert", False))
                 self.send_json(self.pipeline.set_dovi_auto_convert(auto_convert))
 
+            elif path == "/api/scrub_preview":
+                file_path = str(data.get("file_path", "")).strip()
+                if not file_path:
+                    self.send_json({"success": False, "error": "file_path is required."}, status=400)
+                    return
+                start_time = data.get("start_time", 50.0)
+                duration = data.get("duration", 20.0)
+                self.send_json(self.pipeline.generate_scrub_preview(file_path, start_time=start_time, duration=duration))
+
             else:
                 self.send_error(404, "Not Found")
 
@@ -265,6 +286,61 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_json({"success": False, "error": f"Unexpected error: {e}"}, status=500)
 
     # -------------------------------------------------------------- helpers
+
+    def send_video(self, file_path: str):
+        """Streams an MP4 file with HTTP 206 Partial Content range support for smooth video scrubbing."""
+        try:
+            file_size = os.path.getsize(file_path)
+        except OSError as e:
+            self.send_error(404, f"File not found: {e}")
+            return
+
+        range_header = self.headers.get("Range")
+        if range_header and range_header.startswith("bytes="):
+            try:
+                parts = range_header.replace("bytes=", "").split("-")
+                start = int(parts[0]) if parts[0] else 0
+                end = int(parts[1]) if parts[1] else file_size - 1
+                if end >= file_size:
+                    end = file_size - 1
+                length = end - start + 1
+
+                self.send_response(206)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+
+                with open(file_path, "rb") as f:
+                    f.seek(start)
+                    bytes_left = length
+                    while bytes_left > 0:
+                        chunk = f.read(min(bytes_left, 65536))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        bytes_left -= len(chunk)
+                return
+            except Exception:
+                return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Content-Length", str(file_size))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            with open(file_path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except Exception:
+            pass
 
     def send_file(self, file_path: str, content_type: str, cache: bool = False):
         try:

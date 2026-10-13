@@ -528,7 +528,12 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
         thumbWrap.appendChild(tag);
       }
     } else {
-      thumbWrap.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#6b7280;font-size:12px;">No Title Card Captured</div>`;
+      thumbWrap.innerHTML = `
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#6b7280;font-size:12px;cursor:pointer;">
+          <span>No Title Card Captured</span>
+          <span style="color:#60a5fa;font-size:11px;font-weight:600;">🎬 Click to Scrub Footage</span>
+        </div>`;
+      thumbWrap.onclick = () => openScrubber(item.file_path, item.timestamp || 50.0);
     }
     card.appendChild(thumbWrap);
 
@@ -703,6 +708,14 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     btnDrawer.title = "Pick another captured frame or extract at custom timestamp";
     toolsRow.appendChild(btnDrawer);
 
+    const btnScrub = document.createElement("button");
+    btnScrub.type = "button";
+    btnScrub.className = "btn-card-tool";
+    btnScrub.innerHTML = `<span>🎬</span> Scrub Footage`;
+    btnScrub.title = "Open interactive video scrubber and keyframe filmstrip to find title card manually";
+    btnScrub.onclick = () => openScrubber(item.file_path, item.timestamp || 50.0);
+    toolsRow.appendChild(btnScrub);
+
     content.appendChild(toolsRow);
 
     // Collapsible Frame Drawer
@@ -712,6 +725,17 @@ function renderCards(matches, availableEpisodes, reviewThreshold) {
     btnDrawer.onclick = () => {
       drawer.style.display = drawer.style.display === "none" ? "flex" : "none";
     };
+
+    // Quick scrubber launcher inside drawer
+    const drawerScrubRow = document.createElement("div");
+    drawerScrubRow.className = "frame-drawer-row";
+    drawerScrubRow.innerHTML = `
+      <button type="button" class="btn btn-secondary btn-sm" style="width: 100%;">
+        🎬 Open Interactive Video Scrubber &amp; Filmstrip
+      </button>
+    `;
+    drawerScrubRow.querySelector("button").onclick = () => openScrubber(item.file_path, item.timestamp || 50.0);
+    drawer.appendChild(drawerScrubRow);
 
     // If multiple frames exist, display chips
     if (item.available_frames && item.available_frames.length > 0) {
@@ -1053,4 +1077,280 @@ async function modalRescanFile() {
 
 function closeModal() {
   document.getElementById("image-modal").style.display = "none";
+}
+
+// ------------------------------------------------------------- Interactive Video Scrubber & Filmstrip
+
+let scrubberState = {
+  filePath: "",
+  startTime: 50.0,
+  duration: 20.0,
+  videoDuration: 0.0,
+  currentClipTime: 50.0,
+  keyframes: [],
+  chapters: [],
+};
+
+function formatTimecode(seconds) {
+  if (isNaN(seconds) || seconds < 0) return "00:00.0";
+  const total = Math.max(0, Number(seconds));
+  const m = Math.floor(total / 60);
+  const s = (total % 60).toFixed(1);
+  const mm = m < 10 ? "0" + m : "" + m;
+  const ss = (total % 60) < 10 ? "0" + s : "" + s;
+  return `${mm}:${ss}`;
+}
+
+async function openScrubber(filePath, initialStartTime = 50.0) {
+  if (!filePath) return;
+  closeModal();
+  scrubberState.filePath = filePath;
+  const fileName = filePath.split(/[/\\]/).pop() || filePath;
+
+  let start = typeof initialStartTime === "number" ? initialStartTime : parseFloat(initialStartTime);
+  if (isNaN(start) || start <= 0) start = 50.0;
+  scrubberState.startTime = start;
+  scrubberState.duration = 20.0;
+  scrubberState.currentClipTime = start;
+
+  document.getElementById("scrub-file-title").textContent = `🎬 Manual Title Card Scrubber: ${fileName}`;
+  document.getElementById("scrub-file-subtitle").textContent = filePath;
+  document.getElementById("scrub-start-input").value = formatTimecode(start);
+  document.getElementById("scrub-duration-select").value = "20";
+
+  const modal = document.getElementById("scrubber-modal");
+  modal.style.display = "flex";
+
+  await loadScrubberPreview();
+}
+
+function modalOpenScrubber() {
+  if (modalState && modalState.filePath) {
+    const currentFrame = modalState.frames && modalState.frames[modalState.activeIdx];
+    const initialT = currentFrame ? currentFrame.timestamp : 50.0;
+    openScrubber(modalState.filePath, initialT);
+  }
+}
+
+function closeScrubberModal() {
+  const video = document.getElementById("scrub-video");
+  if (video) {
+    video.pause();
+    video.src = "";
+  }
+  document.getElementById("scrubber-modal").style.display = "none";
+}
+
+async function refreshScrubberPreview() {
+  const startVal = document.getElementById("scrub-start-input").value.trim();
+  const durVal = parseFloat(document.getElementById("scrub-duration-select").value) || 20.0;
+
+  scrubberState.startTime = startVal;
+  scrubberState.duration = durVal;
+  await loadScrubberPreview();
+}
+
+async function loadScrubberPreview() {
+  const loading = document.getElementById("scrub-loading");
+  const loadingText = document.getElementById("scrub-loading-text");
+  const video = document.getElementById("scrub-video");
+  const filmstrip = document.getElementById("scrub-filmstrip");
+  const chaptersBar = document.getElementById("scrub-chapters-bar");
+
+  loading.style.display = "flex";
+  loadingText.textContent = `Generating fast ${scrubberState.duration}s scrubable preview clip...`;
+  video.pause();
+  filmstrip.innerHTML = "";
+  chaptersBar.style.display = "none";
+  chaptersBar.innerHTML = "";
+
+  try {
+    const res = await fetch("/api/scrub_preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        file_path: scrubberState.filePath,
+        start_time: scrubberState.startTime,
+        duration: scrubberState.duration
+      })
+    });
+    const data = await res.json();
+    if (!data.success) {
+      alert("Error generating scrub preview: " + (data.error || "Unknown error"));
+      loading.style.display = "none";
+      return;
+    }
+
+    scrubberState.startTime = data.start_time;
+    scrubberState.duration = data.duration;
+    scrubberState.videoDuration = data.video_duration || 0;
+    scrubberState.keyframes = data.keyframes || [];
+    scrubberState.chapters = data.chapters || [];
+    scrubberState.currentClipTime = data.start_time;
+
+    // Render Chapters Bar if available
+    if (data.chapters && data.chapters.length > 0) {
+      chaptersBar.innerHTML = '<span style="font-size:11px;color:var(--text-secondary);font-weight:600;">Chapters:</span>';
+      data.chapters.slice(0, 8).forEach(c => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "chapter-chip";
+        chip.textContent = `${c.title} (${formatTimecode(c.start)})`;
+        chip.onclick = () => {
+          document.getElementById("scrub-start-input").value = formatTimecode(c.start);
+          refreshScrubberPreview();
+        };
+        chaptersBar.appendChild(chip);
+      });
+      chaptersBar.style.display = "flex";
+    }
+
+    // Set Video Source
+    if (data.has_video && data.video_url) {
+      video.src = data.video_url;
+      video.load();
+    } else {
+      video.src = "";
+    }
+
+    // Render Keyframes Filmstrip
+    renderFilmstrip(data.keyframes);
+
+    updateTimecodeDisplay(scrubberState.startTime);
+
+  } catch (err) {
+    alert("Failed to load scrub preview: " + err.message);
+  } finally {
+    loading.style.display = "none";
+  }
+}
+
+function renderFilmstrip(keyframes) {
+  const strip = document.getElementById("scrub-filmstrip");
+  strip.innerHTML = "";
+  if (!keyframes || keyframes.length === 0) {
+    strip.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">No filmstrip frames available.</div>';
+    return;
+  }
+
+  keyframes.forEach((kf, idx) => {
+    const card = document.createElement("div");
+    card.className = "filmstrip-card";
+    card.title = `Click to jump to t = ${kf.timestamp}s. Double-click to set as Title Card.`;
+
+    const img = document.createElement("img");
+    img.src = kf.thumbnail_url;
+    img.alt = `Keyframe ${idx + 1}`;
+    card.appendChild(img);
+
+    const footer = document.createElement("div");
+    footer.className = "filmstrip-footer";
+
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "filmstrip-time";
+    timeSpan.textContent = formatTimecode(kf.timestamp);
+    footer.appendChild(timeSpan);
+
+    const useBtn = document.createElement("button");
+    useBtn.type = "button";
+    useBtn.className = "filmstrip-btn";
+    useBtn.textContent = "Use";
+    useBtn.onclick = (e) => {
+      e.stopPropagation();
+      captureExactTime(scrubberState.filePath, kf.timestamp);
+    };
+    footer.appendChild(useBtn);
+
+    card.appendChild(footer);
+
+    // Single click: jump video
+    card.onclick = () => {
+      const video = document.getElementById("scrub-video");
+      const relTime = Math.max(0, kf.timestamp - scrubberState.startTime);
+      if (video && !isNaN(video.duration)) {
+        video.currentTime = Math.min(relTime, video.duration);
+        video.pause();
+      }
+      updateTimecodeDisplay(kf.timestamp);
+      document.querySelectorAll(".filmstrip-card").forEach(c => c.classList.remove("active-frame"));
+      card.classList.add("active-frame");
+    };
+
+    // Double click: apply directly
+    card.ondblclick = () => {
+      captureExactTime(scrubberState.filePath, kf.timestamp);
+    };
+
+    strip.appendChild(card);
+  });
+}
+
+function onScrubTimeUpdate() {
+  const video = document.getElementById("scrub-video");
+  if (!video) return;
+  const absTime = scrubberState.startTime + (video.currentTime || 0);
+  updateTimecodeDisplay(absTime);
+}
+
+function updateTimecodeDisplay(absTime) {
+  scrubberState.currentClipTime = absTime;
+  const formatted = formatTimecode(absTime);
+  const text = `${formatted} (${absTime.toFixed(1)}s)`;
+  const timecodeEl = document.getElementById("scrub-current-timecode");
+  const applyTimeEl = document.getElementById("scrub-apply-time");
+  if (timecodeEl) timecodeEl.textContent = text;
+  if (applyTimeEl) applyTimeEl.textContent = formatted;
+}
+
+function stepScrubVideo(deltaSeconds) {
+  const video = document.getElementById("scrub-video");
+  if (!video) return;
+  video.pause();
+  const playBtn = document.getElementById("btn-play-pause");
+  if (playBtn) playBtn.textContent = "⏯ Play";
+  const duration = video.duration || scrubberState.duration || 20.0;
+  const newRelTime = Math.max(0, Math.min((video.currentTime || 0) + deltaSeconds, duration));
+  video.currentTime = newRelTime;
+  const absTime = scrubberState.startTime + newRelTime;
+  updateTimecodeDisplay(absTime);
+}
+
+function toggleScrubPlayPause() {
+  const video = document.getElementById("scrub-video");
+  const btn = document.getElementById("btn-play-pause");
+  if (!video) return;
+  if (video.paused) {
+    video.play();
+    btn.textContent = "⏸ Pause";
+  } else {
+    video.pause();
+    btn.textContent = "⏯ Play";
+  }
+}
+
+async function applyCurrentScrubFrame() {
+  const video = document.getElementById("scrub-video");
+  const relTime = (video && !isNaN(video.currentTime)) ? video.currentTime : 0;
+  const absTime = scrubberState.startTime + relTime;
+  await captureExactTime(scrubberState.filePath, absTime);
+}
+
+async function captureExactTime(filePath, timestamp) {
+  if (!filePath) return;
+  const t = typeof timestamp === "number" ? timestamp.toFixed(2) : timestamp;
+  const btn = document.getElementById("btn-set-title-card");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = `Capturing t = ${t}s...`;
+  }
+  try {
+    await captureCustomFrame(filePath, t);
+    closeScrubberModal();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      const formatted = formatTimecode(Number(timestamp));
+      btn.innerHTML = `🎯 Set as Title Card (<span id="scrub-apply-time">${formatted}</span>)`;
+    }
+  }
 }

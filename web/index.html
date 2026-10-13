@@ -286,7 +286,85 @@
           <input type="text" id="modal-rescan-win" placeholder="e.g. 64-75 or 120-150">
           <button class="btn btn-secondary btn-sm" onclick="modalRescanFile()">🔄 Rescan File</button>
         </div>
+        <div class="frame-drawer-row" style="margin-top: 6px;">
+          <button class="btn btn-secondary btn-sm" onclick="modalOpenScrubber()" style="width: 100%;">
+            🎬 Open Interactive Video Scrubber &amp; Filmstrip
+          </button>
+        </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Modal Dialog for Video Scrubber & Filmstrip -->
+  <div class="modal" id="scrubber-modal" onclick="closeScrubberModal()">
+    <div class="modal-content scrubber-modal-content" onclick="event.stopPropagation()">
+      <span class="close-btn" onclick="closeScrubberModal()">&times;</span>
+      
+      <div class="scrubber-header">
+        <h3 id="scrub-file-title">🎬 Manual Title Card Scrubber</h3>
+        <p id="scrub-file-subtitle" class="scrub-subtitle"></p>
+      </div>
+
+      <!-- Scrubber Window Controls -->
+      <div class="scrub-controls-bar">
+        <div class="scrub-ctrl-group">
+          <label for="scrub-start-input">Start Time:</label>
+          <input type="text" id="scrub-start-input" value="00:50" placeholder="e.g. 50 or 01:15" style="width: 100px;">
+        </div>
+        <div class="scrub-ctrl-group">
+          <label for="scrub-duration-select">Duration:</label>
+          <select id="scrub-duration-select" style="width: 110px;">
+            <option value="15">15 seconds</option>
+            <option value="20" selected>20 seconds</option>
+            <option value="30">30 seconds</option>
+            <option value="60">60 seconds</option>
+          </select>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-preview" onclick="refreshScrubberPreview()">
+          🔄 Generate Preview Clip
+        </button>
+      </div>
+
+      <!-- Chapter Quick Jump Bar -->
+      <div class="chapter-bar" id="scrub-chapters-bar" style="display: none;"></div>
+
+      <!-- Video Player Viewport -->
+      <div class="scrub-player-wrap" id="scrub-player-wrap">
+        <div class="scrub-loading-overlay" id="scrub-loading" style="display: none;">
+          <div class="spinner"></div>
+          <span id="scrub-loading-text">Generating fast 20s preview clip...</span>
+        </div>
+        <video id="scrub-video" playsinline preload="auto" ontimeupdate="onScrubTimeUpdate()"></video>
+      </div>
+
+      <!-- Precision Step & Scrub Bar -->
+      <div class="scrub-stepper-bar">
+        <div class="scrub-time-readout">
+          <span class="time-label">Video Time:</span>
+          <span class="time-val" id="scrub-current-timecode">00:00.0 (0.0s)</span>
+        </div>
+
+        <div class="stepper-buttons">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="stepScrubVideo(-5.0)" title="-5 seconds">⏪ -5s</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="stepScrubVideo(-1.0)" title="-1 second">◀ -1s</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="stepScrubVideo(-0.1)" title="-1 frame / -0.1s">◂ -0.1s</button>
+          <button type="button" class="btn btn-secondary btn-sm" id="btn-play-pause" onclick="toggleScrubPlayPause()">⏯ Play</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="stepScrubVideo(0.1)" title="+1 frame / +0.1s">+0.1s ▸</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="stepScrubVideo(1.0)" title="+1 second">+1s ▶</button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="stepScrubVideo(5.0)" title="+5 seconds">+5s ⏩</button>
+        </div>
+
+        <button type="button" class="btn btn-success" id="btn-set-title-card" onclick="applyCurrentScrubFrame()">
+          🎯 Set as Title Card (<span id="scrub-apply-time">00:00.0</span>)
+        </button>
+      </div>
+
+      <!-- Filmstrip / Keyframes Gallery -->
+      <div class="filmstrip-section">
+        <div class="filmstrip-title">🎞️ Keyframe Contact Sheet (Sampled Every 2s — Click to Jump, Double-click to Select)</div>
+        <div class="filmstrip-container" id="scrub-filmstrip"></div>
+      </div>
+
     </div>
   </div>
 

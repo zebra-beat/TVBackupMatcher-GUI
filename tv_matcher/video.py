@@ -192,3 +192,87 @@ def extract_frame(video_path: str, timestamp: float, output_path: str,
                 except Exception:
                     pass
         return False
+
+
+def generate_video_preview(video_path: str, start_time: float, duration: float, output_path: str) -> bool:
+    """
+    Generates a lightweight, ultrafast 640px H.264 MP4 preview clip for interactive in-browser scrubbing.
+    Fast seeking is applied (-ss before -i).
+    """
+    if not os.path.isfile(video_path):
+        return False
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    st = max(0.0, float(start_time))
+    dur = max(2.0, min(float(duration), 180.0))
+
+    cmd = [
+        FFMPEG_BIN, "-nostdin", "-v", "error", "-y",
+        "-ss", f"{st:.2f}",
+        "-t", f"{dur:.2f}",
+        "-i", video_path,
+        "-vf", "scale='min(640,iw)':-2",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "28",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an",
+        output_path,
+    ]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=True)
+        return os.path.isfile(output_path) and os.path.getsize(output_path) > 0
+    except subprocess.CalledProcessError as e:
+        err = e.stderr.decode("utf-8", errors="ignore").strip() if e.stderr else str(e)
+        logger.warning("generate_video_preview failed: %s", err)
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+        return False
+    except Exception as e:
+        logger.warning("generate_video_preview exception: %s", e)
+        if os.path.exists(output_path):
+            try:
+                os.remove(output_path)
+            except Exception:
+                pass
+        return False
+
+
+def extract_preview_strip(video_path: str, start_time: float, duration: float, count: int,
+                          output_dir: str, prefix: str) -> List[Dict]:
+    """
+    Extracts a series of thumbnail frames across [start_time, start_time + duration]
+    to form a visual filmstrip / keyframe contact sheet for manual title card identification.
+    """
+    if not os.path.isfile(video_path):
+        return []
+    os.makedirs(output_dir, exist_ok=True)
+    st = max(0.0, float(start_time))
+    dur = max(1.0, float(duration))
+    n = max(2, min(int(count), 30))
+    step = dur / max(1, n - 1)
+
+    results = []
+    for i in range(n):
+        t = round(st + i * step, 2)
+        img_path = os.path.join(output_dir, f"{prefix}_{int(round(t * 10)):06d}.jpg")
+        cmd = [
+            FFMPEG_BIN, "-nostdin", "-v", "error", "-y",
+            "-ss", f"{t:.2f}",
+            "-i", video_path,
+            "-vf", "scale='min(480,iw)':-2",
+            "-frames:v", "1",
+            "-q:v", "3",
+            img_path,
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
+            if os.path.isfile(img_path) and os.path.getsize(img_path) > 0:
+                results.append({"timestamp": t, "image_path": img_path})
+        except Exception:
+            continue
+
+    return results
