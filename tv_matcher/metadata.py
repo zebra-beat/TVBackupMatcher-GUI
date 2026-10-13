@@ -6,7 +6,7 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional
 
-USER_AGENT = "TVBackupMatcherGUI/2.1"
+USER_AGENT = "TVBackupMatcherGUI/2.2"
 
 
 @dataclass

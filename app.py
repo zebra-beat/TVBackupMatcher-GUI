@@ -20,7 +20,7 @@ from tv_matcher.config import get_system_status
 from tv_matcher.pipeline import MatchingPipeline
 from server.api_server import run_server
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 
 def find_free_port(host="127.0.0.1", default_port=8765):
