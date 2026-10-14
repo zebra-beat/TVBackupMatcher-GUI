@@ -7,9 +7,18 @@ block_cipher = None
 # Base path of repository
 base_dir = os.path.abspath(SPECPATH)
 
+try:
+    from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+    webview_datas = collect_data_files('webview')
+    webview_imports = collect_submodules('webview')
+except Exception:
+    webview_datas = []
+    webview_imports = ['webview']
+
 datas = [
     (os.path.join(base_dir, 'web'), 'web'),
-]
+    (os.path.join(base_dir, 'data'), 'data'),
+] + webview_datas
 
 binaries = []
 
@@ -30,7 +39,8 @@ hiddenimports = [
     'server',
     'server.api_server',
     'sqlite3',
-]
+    'webview',
+] + webview_imports
 
 a = Analysis(
     [os.path.join(base_dir, 'app.py')],
@@ -64,7 +74,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

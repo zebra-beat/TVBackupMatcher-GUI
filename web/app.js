@@ -8,6 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadUserSettings();
   pollState();
   initDirAutocomplete();
+  loadDatabaseStats();
 });
 
 async function checkSystemStatus() {
@@ -1032,6 +1033,7 @@ async function confirmMatch(filePath) {
     const data = await res.json();
     if (data.success) {
       pollState();
+      loadDatabaseStats();
     }
   } catch (err) {
     alert("Confirm failed: " + err.message);
@@ -1959,5 +1961,258 @@ function initDirAutocomplete() {
       dropdown.style.display = "none";
     }
   });
+}
+
+// ------------------------------------------------------------- Database & Community Sync
+
+let cachedDbRecords = [];
+
+async function loadDatabaseStats() {
+  try {
+    const res = await fetch("/api/database/stats");
+    if (!res.ok) return;
+    const stats = await res.json();
+    const countEl = document.getElementById("nav-db-count");
+    if (countEl) {
+      countEl.textContent = stats.total_records || 0;
+    }
+    const statTotal = document.getElementById("db-stat-total");
+    const statManual = document.getElementById("db-stat-manual");
+    const statAuto = document.getElementById("db-stat-auto");
+    const statSeries = document.getElementById("db-stat-series");
+    if (statTotal) statTotal.textContent = stats.total_records || 0;
+    if (statManual) statManual.textContent = stats.manual_confirmations || 0;
+    if (statAuto) statAuto.textContent = stats.auto_scans || 0;
+    if (statSeries) statSeries.textContent = stats.series_count || 0;
+  } catch (err) {
+    console.debug("Failed to load database stats:", err);
+  }
+}
+
+async function openDatabaseSyncModal() {
+  const modal = document.getElementById("db-sync-modal");
+  if (!modal) return;
+  modal.style.display = "flex";
+  setDbSyncStatus("", "");
+  await loadDatabaseStats();
+  await loadDatabaseRecords();
+}
+
+function closeDatabaseSyncModal() {
+  const modal = document.getElementById("db-sync-modal");
+  if (modal) modal.style.display = "none";
+}
+
+async function loadDatabaseRecords() {
+  const tbody = document.getElementById("db-records-tbody");
+  if (tbody) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 20px;">Loading database records...</td></tr>';
+  }
+  try {
+    const res = await fetch("/api/database_records");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    cachedDbRecords = Array.isArray(data.records) ? data.records : [];
+    filterDatabaseTable();
+  } catch (err) {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--color-danger); padding: 20px;">Failed to load records: ${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+}
+
+function setDbSyncStatus(msg, type = "info") {
+  const statusEl = document.getElementById("db-sync-status");
+  if (!statusEl) return;
+  if (!msg) {
+    statusEl.style.display = "none";
+    statusEl.textContent = "";
+    statusEl.className = "db-sync-status";
+    return;
+  }
+  statusEl.className = `db-sync-status ${type}`;
+  statusEl.textContent = msg;
+  statusEl.style.display = "block";
+}
+
+function filterDatabaseTable() {
+  const query = (document.getElementById("db-search-input")?.value || "").trim().toLowerCase();
+  if (!query) {
+    renderDatabaseTable(cachedDbRecords);
+    return;
+  }
+  const filtered = cachedDbRecords.filter(r => {
+    return (
+      (r.series_name && r.series_name.toLowerCase().includes(query)) ||
+      (r.episode_code && r.episode_code.toLowerCase().includes(query)) ||
+      (r.episode_title && r.episode_title.toLowerCase().includes(query)) ||
+      (r.file_name && r.file_name.toLowerCase().includes(query))
+    );
+  });
+  renderDatabaseTable(filtered);
+}
+
+function renderDatabaseTable(records) {
+  const tbody = document.getElementById("db-records-tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!records || records.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 24px;">No matching title card records found.</td></tr>';
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  records.forEach(r => {
+    const tr = document.createElement("tr");
+
+    const tdSeries = document.createElement("td");
+    tdSeries.textContent = r.series_name || "-";
+    tr.appendChild(tdSeries);
+
+    const tdEp = document.createElement("td");
+    tdEp.style.fontWeight = "600";
+    tdEp.textContent = r.episode_code || "-";
+    tr.appendChild(tdEp);
+
+    const tdTitle = document.createElement("td");
+    tdTitle.textContent = r.episode_title || "-";
+    tr.appendChild(tdTitle);
+
+    const tdTime = document.createElement("td");
+    const tVal = (typeof r.title_card_time === "number") ? r.title_card_time : parseFloat(r.title_card_time);
+    tdTime.textContent = !isNaN(tVal) ? formatTimecode(tVal) : (r.title_card_time || "-");
+    tr.appendChild(tdTime);
+
+    const tdType = document.createElement("td");
+    const isManual = (r.confirmation_type === "manual");
+    tdType.innerHTML = `<span class="db-type-badge ${isManual ? "manual" : "auto"}">${isManual ? "🎯 Manual" : "⚡ Auto"}</span>`;
+    tr.appendChild(tdType);
+
+    const tdScore = document.createElement("td");
+    const scoreVal = parseFloat(r.match_score);
+    tdScore.textContent = !isNaN(scoreVal) ? `${Math.round(scoreVal * 100)}%` : "-";
+    tr.appendChild(tdScore);
+
+    fragment.appendChild(tr);
+  });
+
+  tbody.appendChild(fragment);
+}
+
+async function pullCommunityDatabase() {
+  const btn = document.getElementById("btn-pull-community");
+  if (btn) btn.disabled = true;
+  setDbSyncStatus("⬇️ Fetching latest community title cards from GitHub repository...", "info");
+
+  try {
+    const res = await fetch("/api/database/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (data.success) {
+      setDbSyncStatus(
+        `✅ Community database synced: ${data.imported || 0} records imported (${data.upgraded || 0} upgraded to manual confirmations). Total loaded: ${data.records_read || 0}.`,
+        "success"
+      );
+      await loadDatabaseStats();
+      await loadDatabaseRecords();
+    } else {
+      setDbSyncStatus(`❌ Failed to pull community database: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    setDbSyncStatus(`❌ Network error while pulling community database: ${err.message}`, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function syncDatabaseToRepo() {
+  const btn = document.getElementById("btn-sync-repo");
+  if (btn) btn.disabled = true;
+  setDbSyncStatus("⬆️ Exporting database and syncing to git repository...", "info");
+
+  try {
+    const res = await fetch("/api/database/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ push: true })
+    });
+    const data = await res.json();
+    if (data.success) {
+      const pushNote = data.pushed ? "Changes pushed to remote git repository." : "Saved & committed to local git repository.";
+      setDbSyncStatus(`✅ ${data.message} ${pushNote} (${data.records_count} records formatted in data/community_database.json)`, "success");
+      await loadDatabaseStats();
+      await loadDatabaseRecords();
+    } else {
+      setDbSyncStatus(`⚠️ Sync notification: ${data.message || data.error || "Could not complete git sync."}`, "info");
+      await loadDatabaseStats();
+    }
+  } catch (err) {
+    setDbSyncStatus(`❌ Sync error: ${err.message}`, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function exportDatabaseJson() {
+  const btn = document.getElementById("btn-export-json");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch("/api/database/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    if (data.success && data.data) {
+      const blob = new Blob([JSON.stringify(data.data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "community_database.json";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setDbSyncStatus(`✅ Exported ${data.records_count} title card records to community_database.json!`, "success");
+    } else {
+      setDbSyncStatus(`❌ Export failed: ${data.error || "Unknown error"}`, "error");
+    }
+  } catch (err) {
+    setDbSyncStatus(`❌ Export error: ${err.message}`, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function quitApplication() {
+  if (!confirm("Are you sure you want to quit TVBackupMatcher?\nAll background processes will be terminated cleanly.")) {
+    return;
+  }
+
+  document.body.innerHTML = `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-align: center; padding: 20px;">
+      <div style="font-size: 54px; margin-bottom: 16px;">👋</div>
+      <h1 style="font-size: 26px; font-weight: 700; margin-bottom: 8px;">TVBackupMatcher Has Shut Down</h1>
+      <p style="font-size: 15px; color: #94a3b8; max-width: 480px; margin-bottom: 24px;">All background server processes have terminated. You can safely close this window.</p>
+    </div>
+  `;
+
+  try {
+    await fetch("/api/shutdown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+  } catch (_) {
+    // Server shutdown might drop connection before responding, which is expected
+  }
+
+  try {
+    window.close();
+  } catch (_) {}
 }
 

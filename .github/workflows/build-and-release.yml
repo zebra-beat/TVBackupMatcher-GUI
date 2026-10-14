@@ -131,10 +131,10 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/cryptochrome/dovi_convert/master/dovi_convert.py -o "$(brew --prefix)/bin/dovi_convert"
           chmod +x "$(brew --prefix)/bin/dovi_convert"
 
-      - name: Install PyInstaller
+      - name: Install PyInstaller and PyWebView
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pyinstaller
+          python3 -m pip install pyinstaller pywebview
 
       - name: Build self-contained DMG with bundled dependencies
         run: |

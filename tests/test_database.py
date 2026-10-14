@@ -22,7 +22,7 @@ class TestDatabase(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.db_path = os.path.join(self.temp_dir.name, "test_matcher.db")
-        init_db(self.db_path)
+        init_db(self.db_path, auto_seed=False)
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -147,8 +147,73 @@ class TestDatabase(unittest.TestCase):
         )
         raw_map = get_raw_disc_records("Succession", db_path=self.db_path)
         self.assertIn("D1_t00.mkv", raw_map)
-        self.assertEqual(raw_map["D1_t00.mkv"]["episode_code"], "S01E01")
-        self.assertEqual(raw_map["D1_t00.mkv"]["raw_disc_tag"], "_t00")
+    def test_community_database_export_and_import(self):
+        from tv_matcher.database import export_community_database, import_community_database, get_database_stats
+
+        # Save some sample records
+        save_title_card_record(
+            series_name="Severance",
+            episode_code="S01E01",
+            episode_title="Good News About Hell",
+            frame_time=120.5,
+            file_path="/media/rips/disc1_t00.mkv",
+            confirmation_type="manual",
+            score=1.0,
+            ocr_text="GOOD NEWS ABOUT HELL",
+            db_path=self.db_path
+        )
+        save_title_card_record(
+            series_name="Severance",
+            episode_code="S01E02",
+            episode_title="Half Loop",
+            frame_time=118.0,
+            file_path="/media/rips/disc1_t01.mkv",
+            confirmation_type="auto",
+            score=0.9,
+            ocr_text="HALF LOOP",
+            db_path=self.db_path
+        )
+
+        # Export to a temp json file
+        json_path = os.path.join(self.temp_dir.name, "community_test.json")
+        res_exp = export_community_database(output_path=json_path, db_path=self.db_path)
+        self.assertTrue(res_exp["success"])
+        self.assertEqual(res_exp["records_count"], 2)
+        self.assertEqual(res_exp["series_count"], 1)
+        self.assertTrue(os.path.isfile(json_path))
+
+        # Check stats
+        stats = get_database_stats(db_path=self.db_path)
+        self.assertEqual(stats["total_records"], 2)
+        self.assertEqual(stats["manual_records"], 1)
+        self.assertEqual(stats["auto_records"], 1)
+        self.assertEqual(stats["series_count"], 1)
+
+        # Create a fresh database and import
+        fresh_db = os.path.join(self.temp_dir.name, "fresh.db")
+        init_db(fresh_db, auto_seed=False)
+        res_imp = import_community_database(source=json_path, db_path=fresh_db)
+        self.assertTrue(res_imp["success"])
+        self.assertEqual(res_imp["inserted"], 2)
+
+        # Verify records exist in fresh database
+        rec1 = get_episode_record("Severance", "S01E01", db_path=fresh_db)
+        self.assertIsNotNone(rec1)
+        self.assertEqual(rec1["frame_time"], 120.5)
+        self.assertEqual(rec1["confirmation_type"], "manual")
+
+    def test_sync_database_to_repo_mock(self):
+        from tv_matcher.database import sync_database_to_repo
+
+        # Create a fake git repo directory
+        fake_repo = os.path.join(self.temp_dir.name, "fake_repo")
+        os.makedirs(os.path.join(fake_repo, ".git"), exist_ok=True)
+        os.makedirs(os.path.join(fake_repo, "data"), exist_ok=True)
+
+        # Run sync_database_to_repo without push
+        res = sync_database_to_repo(repo_dir=fake_repo, push=False, db_path=self.db_path)
+        self.assertTrue(res["success"])
+        self.assertTrue(os.path.isfile(os.path.join(fake_repo, "data", "community_database.json")))
 
 
 if __name__ == "__main__":

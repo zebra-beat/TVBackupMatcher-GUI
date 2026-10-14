@@ -248,6 +248,79 @@ class TestServerAndPackaging(unittest.TestCase):
             found = find_binary("tesseract", fallback_paths=[mock_win_tess])
             self.assertEqual(found, mock_win_tess)
 
+    def test_send_json_dataclass_serialization(self):
+        """Verifies EpisodeInfo and nested dataclasses serialize without TypeError."""
+        import io
+        from tv_matcher.metadata import EpisodeInfo
+
+        class DummyHandler(GUIRequestHandler):
+            def __init__(self):
+                self.wfile = io.BytesIO()
+                self._headers = []
+            def send_response(self, code, message=None):
+                self._code = code
+            def send_header(self, keyword, value):
+                self._headers.append((keyword, value))
+            def end_headers(self):
+                pass
+
+        handler = DummyHandler()
+        ep = EpisodeInfo(season=1, episode=4, title="Sample Title", code="S01E04")
+        test_payload = {
+            "success": True,
+            "match": {
+                "episode": ep,
+                "score": 0.95,
+                "timestamp": 74.5,
+            }
+        }
+        # This previously threw TypeError: Object of type EpisodeInfo is not JSON serializable
+        handler.send_json(test_payload)
+        output_bytes = handler.wfile.getvalue()
+        self.assertTrue(len(output_bytes) > 0)
+        self.assertIn(b"Sample Title", output_bytes)
+        self.assertIn(b"S01E04", output_bytes)
+
+    def test_database_community_sync_endpoints(self):
+        """Tests /api/database/stats and /api/database/export endpoints."""
+        import io
+        import json
+        from tv_matcher.pipeline import MatchingPipeline
+
+        class DummyHandler(GUIRequestHandler):
+            def __init__(self, path="/", body=b"{}"):
+                self.path = path
+                self.requestline = f"POST {path} HTTP/1.1"
+                self.wfile = io.BytesIO()
+                self.rfile = io.BytesIO(body)
+                self.headers = {
+                    "Content-Length": str(len(body)),
+                    "Content-Type": "application/json",
+                    "Host": "127.0.0.1:8765"
+                }
+                self.pipeline = MatchingPipeline()
+                self.server = type("MockServer", (), {"server_address": ("127.0.0.1", 8765)})()
+            def send_response(self, code, message=None):
+                self._code = code
+            def send_header(self, keyword, value):
+                pass
+            def end_headers(self):
+                pass
+
+        # 1. Test GET /api/database/stats
+        handler_get = DummyHandler(path="/api/database/stats")
+        handler_get.do_GET()
+        res_data = json.loads(handler_get.wfile.getvalue().decode("utf-8"))
+        self.assertIn("total_records", res_data)
+        self.assertIn("series_count", res_data)
+
+        # 2. Test POST /api/database/export
+        export_body = json.dumps({"output_path": os.path.join(self.test_dir, "export_test.json")}).encode("utf-8")
+        handler_post = DummyHandler(path="/api/database/export", body=export_body)
+        handler_post.do_POST()
+        exp_res = json.loads(handler_post.wfile.getvalue().decode("utf-8"))
+        self.assertTrue(exp_res.get("success"))
+
 
 if __name__ == "__main__":
     unittest.main()

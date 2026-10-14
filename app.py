@@ -40,6 +40,7 @@ def parse_args():
     except ValueError:
         env_port = 8765
     env_no_browser = os.environ.get("TVMATCHER_NO_BROWSER", os.environ.get("NO_BROWSER", "")).lower() in ("1", "true", "yes")
+    env_no_gui = os.environ.get("TVMATCHER_NO_GUI", os.environ.get("NO_GUI", "")).lower() in ("1", "true", "yes")
 
     parser = argparse.ArgumentParser(
         description="TVBackupMatcher GUI - Scan, OCR, match, and organize physical disc backups."
@@ -56,10 +57,28 @@ def parse_args():
         help="Port number to listen on (default: 8765)."
     )
     parser.add_argument(
+        "--no-gui",
+        action="store_true",
+        default=env_no_gui,
+        help="Run as a background web server without opening a native desktop GUI window."
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=False,
+        help="Alias for --no-gui."
+    )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        default=False,
+        help="Force opening in your default system web browser instead of a native desktop window."
+    )
+    parser.add_argument(
         "--no-browser",
         action="store_true",
         default=env_no_browser,
-        help="Do not automatically open the web browser on launch."
+        help="Do not automatically open the web browser when running in browser mode."
     )
     parser.add_argument(
         "--allow-external",
@@ -75,11 +94,32 @@ def parse_args():
     return parser.parse_args()
 
 
+def run_desktop_gui(url: str, title: str = "TVBackupMatcher GUI", width: int = 1320, height: int = 880) -> bool:
+    """Opens a native desktop application window (WKWebView on macOS) wrapped around the local UI."""
+    try:
+        import webview
+        print("[*] Launching native desktop application window...")
+        window = webview.create_window(
+            title=title,
+            url=url,
+            width=width,
+            height=height,
+            min_size=(980, 680),
+            text_select=True,
+            confirm_close=False,
+        )
+        webview.start()
+        return True
+    except Exception as e:
+        print(f"[*] Native desktop window unavailable ({e}); falling back to browser mode.")
+        return False
+
+
 def main():
     args = parse_args()
 
     print("=" * 65)
-    print(f"   🎬 TVBackupMatcher GUI v{__version__} - Desktop & Web Application 📺   ")
+    print(f"   🎬 TVBackupMatcher GUI v{__version__} - Desktop Application 📺   ")
     print("=" * 65)
 
     status = get_system_status()
@@ -97,7 +137,7 @@ def main():
         print("    macOS : brew install ffmpeg tesseract", file=sys.stderr)
         print("    Linux : apt install ffmpeg tesseract-ocr tesseract-ocr-eng\n", file=sys.stderr)
 
-    # If the user specified a custom port, test or use it; otherwise search free port range starting at default
+    # Search free port range starting at default
     port = find_free_port(args.host, args.port)
     web_dir = os.path.join(BASE_DIR, "web")
     pipeline = MatchingPipeline()
@@ -115,27 +155,46 @@ def main():
 
     print(f"\n[+] Local GUI Server listening on: {url} (bound to {args.host}:{port})")
 
-    if not args.no_browser:
-        print("[*] Opening application in your default web browser...")
+    # Run the server in a daemon thread so it terminates when the main thread exits
+    server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    server_thread.start()
 
-        def open_browser():
-            time.sleep(0.8)
-            webbrowser.open(f"http://127.0.0.1:{port}" if args.host == "0.0.0.0" else url)
+    gui_opened = False
+    if not (args.no_gui or args.headless or args.browser):
+        gui_opened = run_desktop_gui(
+            url=f"http://127.0.0.1:{port}",
+            title=f"TVBackupMatcher GUI v{__version__}"
+        )
 
-        threading.Thread(target=open_browser, daemon=True).start()
-    else:
-        print(f"[*] Headless mode: open {url} in your browser to access the GUI.")
+    if not gui_opened:
+        if not args.no_browser:
+            print("[*] Opening application in your default web browser...")
 
-    print("\n[i] Press Ctrl+C in this terminal window to stop the server.\n")
+            def open_browser():
+                time.sleep(0.8)
+                webbrowser.open(f"http://127.0.0.1:{port}" if args.host == "0.0.0.0" else url)
 
+            threading.Thread(target=open_browser, daemon=True).start()
+        else:
+            print(f"[*] Headless server mode active: open {url} in your browser to access the GUI.")
+
+        print("\n[i] Press Ctrl+C in this terminal window to stop the server.\n")
+
+        try:
+            while server_thread.is_alive():
+                time.sleep(0.5)
+        except KeyboardInterrupt:
+            print("\n[*] Shutting down TVBackupMatcher GUI...")
+
+    # Clean shutdown: terminate all child processes and threads immediately
     try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print("\n[*] Shutting down TVBackupMatcher GUI...")
-    finally:
         pipeline.cleanup()
+        httpd.shutdown()
         httpd.server_close()
-        print("[+] Application closed cleanly.")
+    except Exception:
+        pass
+    print("[+] Application closed cleanly. No background processes remain.")
+    os._exit(0)
 
 
 if __name__ == "__main__":

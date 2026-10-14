@@ -2,17 +2,39 @@ import http.server
 import json
 import mimetypes
 import os
+import threading
+import time
 import urllib.parse
 from typing import Optional, Union
 
 from tv_matcher.browser import browse_directory, choose_native_folder
 from tv_matcher.config import add_recent_dir, get_system_status, load_settings, save_settings
-from tv_matcher.database import get_all_records, get_raw_disc_records, get_records_for_series
+from tv_matcher.database import (
+    export_community_database,
+    get_all_records,
+    get_community_database_path,
+    get_database_stats,
+    get_raw_disc_records,
+    get_records_for_series,
+    import_community_database,
+    sync_database_to_repo,
+)
 from tv_matcher.dovi import get_dovi_status
 from tv_matcher.pipeline import MatchingPipeline
 
 IMAGE_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}
 MAX_BODY_BYTES = 1_000_000
+
+
+def _json_serial_default(obj):
+    """Fallback JSON serializer for dataclasses, models, and custom objects."""
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if hasattr(obj, "__dict__"):
+        return {k: v for k, v in obj.__dict__.items() if not k.startswith("_")}
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    return str(obj)
 
 
 def _is_within(path: str, root: str) -> bool:
@@ -97,6 +119,10 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/dovi/options":
             self.send_json(self.pipeline.dovi_options.to_dict())
+            return
+
+        if path == "/api/database/stats":
+            self.send_json(get_database_stats())
             return
 
         if path == "/api/database_records":
@@ -308,6 +334,37 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
                 res = choose_native_folder(initial_dir)
                 self.send_json(res)
 
+            elif path == "/api/database/export":
+                out_path = data.get("output_path") or None
+                self.send_json(export_community_database(output_path=out_path))
+
+            elif path == "/api/database/import":
+                source = data.get("source") or None
+                self.send_json(import_community_database(source=source))
+
+            elif path == "/api/database/sync":
+                commit_msg = data.get("commit_message") or None
+                push = bool(data.get("push", True))
+                self.send_json(sync_database_to_repo(commit_message=commit_msg, push=push))
+
+            elif path == "/api/shutdown":
+                self.send_json({"success": True, "message": "TVBackupMatcher is shutting down."})
+                def _do_shutdown():
+                    time.sleep(0.3)
+                    try:
+                        import webview
+                        for w in getattr(webview, "windows", []):
+                            w.destroy()
+                    except Exception:
+                        pass
+                    try:
+                        self.server.shutdown()
+                    except Exception:
+                        pass
+                    os._exit(0)
+                threading.Thread(target=_do_shutdown, daemon=True).start()
+                return
+
             else:
                 self.send_error(404, "Not Found")
 
@@ -389,7 +446,7 @@ class GUIRequestHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def send_json(self, data: dict, status: int = 200):
-        body = json.dumps(data).encode("utf-8")
+        body = json.dumps(data, default=_json_serial_default).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

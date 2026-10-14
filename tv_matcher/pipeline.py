@@ -61,6 +61,25 @@ def duration_warning(duration_s: float, runtime_min: Optional[int]) -> str:
     return ""
 
 
+def _serialize_match(m: Optional[dict]) -> Optional[dict]:
+    """Serializes match dictionary including EpisodeInfo dataclass to JSON-compatible dict."""
+    if not m:
+        return None
+    d = dict(m)
+    ep = d.get("episode")
+    if ep is not None:
+        if hasattr(ep, "to_dict"):
+            d["episode"] = ep.to_dict()
+        elif hasattr(ep, "code"):
+            d["episode"] = {
+                "code": getattr(ep, "code", ""),
+                "title": getattr(ep, "title", ""),
+                "season": getattr(ep, "season", 0),
+                "episode": getattr(ep, "episode", 0),
+            }
+    return d
+
+
 class MatchingPipeline:
     def __init__(self, temp_dir: Optional[str] = None, log_dir: Optional[str] = None):
         self.temp_dir = temp_dir or tempfile.mkdtemp(prefix="tvmatcher_gui_")
@@ -691,12 +710,13 @@ class MatchingPipeline:
                     pass
 
             self._bump()
+            m = self.matches.get(file_path, {})
             return {
                 "success": True,
                 "timestamp": frame["timestamp"],
                 "image_path": frame["image_path"],
-                "score": self.matches[file_path]["score"],
-                "ocr_text": self.matches[file_path]["ocr_text"],
+                "score": m.get("score", frame.get("score", 0.0)),
+                "ocr_text": m.get("ocr_text", frame.get("ocr_text", "")),
             }
 
     def capture_custom_frame(self, file_path: str, timestamp_val) -> dict:
@@ -776,7 +796,7 @@ class MatchingPipeline:
                 self.unmatched_active_frames[file_path] = img_path
 
             self._bump()
-            return {"success": True, "frame": new_frame, "match": self.matches.get(file_path)}
+            return {"success": True, "frame": new_frame, "match": _serialize_match(self.matches.get(file_path))}
 
     def generate_scrub_preview(self, file_path: str, start_time=50.0, duration=20.0) -> dict:
         """
@@ -955,7 +975,7 @@ class MatchingPipeline:
             return {
                 "success": True,
                 "file_path": file_path,
-                "match": self.matches.get(file_path),
+                "match": _serialize_match(self.matches.get(file_path)),
                 "frames_count": len(frames),
             }
 
